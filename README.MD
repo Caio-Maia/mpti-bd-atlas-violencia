@@ -1,10 +1,10 @@
 # Projeto da Disciplina – Banco de Dados 2026.1
 ## Atlas da Violência × Indicadores Socioeconômicos por Município
 
-**Equipe:** Rodrigo de Queiroz Gonçalves Velez · Caio Jordan de Lima Maia · Matheus Moreira Luna
-**Disciplina:** Banco de Dados — MPTI / IFPB (Campus João Pessoa)
-**Professor:** Diego Pessoa
-**Checkpoint:** C1 — Escopo + fonte + dicionário de dados (entrega 08/06/2026)
+**Equipe:** Rodrigo de Queiroz Gonçalves Velez · Caio Jordan de Lima Maia · Matheus Moreira Luna </br>
+**Disciplina:** Banco de Dados — MPTI / IFPB (Campus João Pessoa) </br>
+**Professor:** Diego Pessoa </br>
+**Checkpoint:** C1 — Escopo + fonte + dicionário de dados (entrega 08/06/2026) </br>
 
 ---
 
