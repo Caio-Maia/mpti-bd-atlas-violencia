@@ -12,13 +12,13 @@
 
 ### 2.a Problema de dados
 
-A literatura em segurança pública sugere associação entre violência letal e fatores socioeconômicos (renda, educação, desigualdade), mas esses dados não convivem no mesmo ecossistema. Eles se encontram **separados**: o mapa da violência está localizado no Atlas da Violência (Ipea/FBSP) e os indicadores socioeconômicos estão no IBGE. Hoje, cruzar "taxa de homicídios" com "renda média" ou "escolaridade" de um mesmo município exige fazer download de planilhas distintas, padronizar nomes/códigos de município, à mão, e conciliar os períodos (anos).
+A literatura em segurança pública sugere associação entre violência letal e fatores socioeconômicos, especialmente escolaridade e condições demográficas. Entretanto, esses dados não convivem no mesmo ecossistema. Eles se encontram **separados**: o mapa da violência está localizado no Atlas da Violência (Ipea/FBSP) e os indicadores socioeducacionais estão no IBGE. Hoje, cruzar "taxa de homicídios" com indicadores de escolaridade de um mesmo município exige fazer download de planilhas distintas, padronizar nomes/códigos de município e conciliar períodos (anos).
 
-A aplicação resolve isso oferecendo uma base **unificada e consultável** que responde, por município, região e ano, a perguntas como *"os municípios mais violentos são também os de menor renda/escolaridade?"* e *"como essa relação evoluiu na última década?"*.
+A aplicação resolve isso oferecendo uma base **unificada e consultável** que responde, por município, região e ano, a perguntas como *"os municípios mais violentos apresentam menor escolaridade?"* e *"como essa relação evoluiu na última década?"*.
 
 **Usuários-alvo:**
 - **Gestor público / formulador de políticas** (ex.: secretarias de segurança e de assistência social) que precisa priorizar territórios.
-- **Pesquisador / jornalista de dados** que quer explorar a relação violência × condições socioeconômicas sem montar o pipeline do zero.
+- **Pesquisador / jornalista de dados** que quer explorar a relação violência × escolaridade sem montar o pipeline do zero.
 
 ### 2.b Solução proposta
 
@@ -202,7 +202,7 @@ Portanto, não há tratamento de dado pessoal a registrar à luz da LGPD. Ainda 
 | `[Trimestre] × Ensino superior completo ou equivalente` | String | Float \| null | Pop. com superior completo (mil pessoas). | `"1.8"` |
 | `[Trimestre] × Não determinado` | String | Float \| null | Pop. sem declaração de nível de instrução (mil pessoas). | `"0.0"` |
 
-> **Transformação necessária (wide → long):** o arquivo tem 44 trimestres × 9 colunas de nível = 396 colunas de valor. O ETL faz o *unpivot* para o formato `(codIBGE, trimestre, nivelInstrucao, valorMilPessoas)`, depois agrega trimestralmente calculando a **média anual** (4 trimestres) por nível de instrução, gerando uma linha por `(codIBGE, ano)`. O campo derivado `pctEnsinoMedioOuMais` = (médio completo + superior incompleto + superior completo) / total × 100 é calculado na camada Silver como proxy de escolaridade para o cruzamento com homicídios.
+> **Transformação necessária (wide → long):** o arquivo tem 44 trimestres × 9 colunas de nível = 396 colunas de valor. O ETL faz o *unpivot* para o formato `(codIBGE, trimestre, nivelInstrucao, valorMilPessoas)`, depois agrega trimestralmente calculando a **média anual** (4 trimestres) por nível de instrução, gerando uma linha por `(codIBGE, ano)`. O campo derivado `pctEnsinoMedioOuMais` = (médio completo + superior incompleto + superior completo) / total × 100 é calculado na camada Silver como **indicador sintético de escolaridade**, utilizado nos cruzamentos com violência letal e nas análises exploratórias do dashboard.
 
 ---
 
@@ -236,14 +236,14 @@ Portanto, não há tratamento de dado pessoal a registrar à luz da LGPD. Ainda 
 
 > 7 perguntas. Cada uma já indica a consulta MongoDB esperada (Seção 7) e o elemento visual (Seção 8). O conjunto cobre: filtros/projeção, acesso a array embutido (`seriesAnuais`), aggregation multi-estágio, `$lookup` e `$bucket`.
 
-| # | Pergunta | Consulta MongoDB esperada | Visual |
-|---|---|---|---|
-| Q1 | Quais os 10 municípios com maior taxa de homicídios em um ano selecionado? | `$unwind seriesAnuais` → `$match {ano}` → `$sort {taxa:-1}` → `$limit 10` | Ranking + barras |
-| Q2 | Como a taxa de homicídios de um município evoluiu ao longo do período? | `find` com projeção do array via dot notation / `$filter` em `seriesAnuais` | Gráfico de linha |
-| Q3 | Como a taxa média de homicídios se distribui por região/UF num ano? | `$unwind` → `$match {ano}` → `$group {_id:"$regiao", media:$avg}` → `$sort` | Mapa coroplético |
-| Q4 | Os municípios de maior violência são os de menor renda/escolaridade? (cruzamento) | `$unwind` → `$match {ano}` → `$project {taxa, rendaPerCapita, escolaridade}` | Scatter plot (interativo) |
-| Q5 | Quais municípios tiveram, em algum ano, taxa de homicídios acima de X **e** renda abaixo de Y? | `$elemMatch` em `seriesAnuais` (filtro composto no array) | Lista/tabela filtrável |
-| Q6 | Qual a média de homicídios por **porte populacional** (pequeno / médio / grande)? | `$unwind` → `$bucket` por `populacao` → `$avg` (aplica padrão **Bucket/Computed**) | Barras agrupadas |
-| Q7 | Para os top-N municípios, qual o órgão/fonte dos dados de cada indicador? | `$lookup` de `seriesAnuais.fonteIds` → coleção `fontes` | Tabela com proveniência |
+| #  | Pergunta                                                                                                                                           | Consulta MongoDB esperada                                                             | Visual                  |
+| -- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ----------------------- |
+| Q1 | Quais os 10 municípios com maior taxa de homicídios em um ano selecionado?                                                                         | `$unwind seriesAnuais` → `$match {ano}` → `$sort {taxa:-1}` → `$limit 10`             | Ranking + barras        |
+| Q2 | Como a taxa de homicídios de um município evoluiu ao longo do período?                                                                             | `find` com projeção do array via dot notation / `$filter` em `seriesAnuais`           | Gráfico de linha        |
+| Q3 | Como a taxa média de homicídios se distribui por região em um ano?                                                                                 | `$unwind` → `$match {ano}` → `$group {_id:"$nomeRegiao", media:$avg}` → `$sort`       | Mapa coroplético        |
+| Q4 | Municípios com menor escolaridade tendem a apresentar maiores taxas de homicídios?                                                                 | `$unwind` → `$match {ano}` → `$project {taxaHomicidiosPor100k, pctEnsinoMedioOuMais}` | Scatter plot interativo |
+| Q5 | Quais municípios tiveram, em algum ano, taxa de homicídios acima de X e percentual de população com ensino médio ou mais abaixo de Y?              | `$elemMatch` em `seriesAnuais` (filtro composto no array)                             | Lista/tabela filtrável  |
+| Q6 | Qual a média da taxa de homicídios por porte populacional? *(Pequeno: até 20 mil hab.; Médio: 20 mil–100 mil hab.; Grande: acima de 100 mil hab.)* | `$unwind` → `$bucket` por `populacaoTotal` → `$avg`                                   | Barras agrupadas        |
+| Q7 | Para os indicadores exibidos, qual a fonte de origem de cada dado utilizado?                                                                       | `$lookup` de `seriesAnuais.fonteIds` → coleção `fontes`                               | Tabela com proveniência |
 
 ---
