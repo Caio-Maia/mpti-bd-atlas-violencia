@@ -178,7 +178,7 @@ Portanto, não há tratamento de dado pessoal a registrar à luz da LGPD. Ainda 
 | `Valor` | Integer | Integer | Contagem absoluta de homicídios registrados no município no ano de referência, para o sexo do arquivo. Valores `0` são registros válidos (ausência de ocorrências). | `11` | `11` |
 
 **Observações:**
-- O ETL gera, na camada Silver, um campo calculado `homicidiosTotais = homicídiosHomens + homicídiosMulheres` por (município, ano), além de `taxaHomicidiosPor100k` = `(homicídiosTotais / populacaoTotal) × 100.000` — usando a população da Fonte 2.
+- O ETL gera, na camada Silver, um campo calculado `homicidiosTotais = homicídiosHomens + homicídiosMulheres` por (município, ano), além de `taxaHomicidiosPor100k` = `(homicídiosTotais / populacaoTotal) × 100` — usando a população da Fonte 2. O fator é `× 100` (e não `× 100.000`) porque `populacaoTotal` está expressa em **mil pessoas** (unidade nativa do SIDRA); `homicídios / (pop em milhares) × 100` equivale a `homicídios / (pop absoluta) × 100.000`.
 - Municípios com `Valor = 0` em todos os anos são retidos; municípios inexistentes em um dado ano (criados ou extintos) terão o ano ausente no array `seriesAnuais`.
 
 ---
@@ -251,7 +251,7 @@ Portanto, não há tratamento de dado pessoal a registrar à luz da LGPD. Ainda 
 # 5. Modelo Conceitual (UML)
 
 > Checkpoint **C2** — Atlas da Violência × Indicadores Socioeconômicos por Município
-> O diagrama abaixo é **conceitual** (independente de implementação) e norteia o mapeamento para o MongoDB da Seção 6. Cada estereótipo (`<<...>>`) antecipa a decisão de embedding × referência detalhada em 5.c.
+> O diagrama abaixo é **conceitual na estrutura** — entidades, atributos, relacionamentos e cardinalidades independem de implementação — mas já vem **anotado com a estratégia de mapeamento para o MongoDB** por meio de estereótipos (`<<...>>`). Cada estereótipo antecipa a decisão de embedding × referência detalhada em 5.c e materializada no modelo lógico da Seção 6; eles são uma camada de anotação sobre o conceitual, não parte da semântica conceitual em si.
 
 ## Diagrama de classes
 
@@ -284,10 +284,10 @@ classDiagram
         +int ano
         +int homicidiosHomens
         +int homicidiosMulheres
-        +int homicidiosTotais
-        +float populacaoTotal
-        +float taxaHomicidiosPor100k
-        +float pctEnsinoMedioOuMais
+        +int /homicidiosTotais
+        +float populacaoTotal [0..1]
+        +float /taxaHomicidiosPor100k [0..1]
+        +float /pctEnsinoMedioOuMais [0..1]
     }
 
     class NiveisInstrucao {
@@ -311,14 +311,16 @@ classDiagram
         +string licenca
     }
 
-    Regiao "1" --> "1..*" UF : contém
-    UF "1" --> "1..*" Municipio : contém
+    UF "1..*" --> "1" Regiao : pertence a
+    Municipio "1..*" --> "1" UF : pertence a
     Municipio "1" *-- "1..*" SerieAnual : seriesAnuais
     SerieAnual "1" *-- "0..1" NiveisInstrucao : niveisInstrucao
     SerieAnual "0..*" --> "1..*" Fonte : fonteIds
 ```
 
-> Legenda das setas: `*--` = composição (losango preenchido no todo); `-->` = associação por referência. As cardinalidades acompanham cada extremidade.
+> Legenda das setas: `*--` = composição (losango preenchido no todo); `-->` = associação por referência, **apontando no sentido em que a referência é navegada** (de `Municipio` para `UF` e desta para `Regiao`, pois é o documento `Municipio` que guarda a chave — ver 5.c). Atributos prefixados com `/` são **derivados** (calculados na camada Silver); o sufixo `[0..1]` indica atributo **opcional**. As cardinalidades acompanham cada extremidade.
+>
+> **Nota sobre Região/UF/Município:** conceitualmente "contém" é uma agregação (todo-parte). Optou-se por modelá-la como **associação por referência** (`-->`), e não como agregação (`o--`), por coerência com a implementação no MongoDB — a hierarquia geográfica vive em coleções de referência (`regioes`/`ufs`) e o município aponta para elas, conforme 5.c.
 
 ---
 
@@ -340,8 +342,8 @@ classDiagram
 | `homicidiosHomens` | Integer | simples | Contagem absoluta (Atlas, arquivo masculino). |
 | `homicidiosMulheres` | Integer | simples | Contagem absoluta (Atlas, arquivo feminino). |
 | `homicidiosTotais` | Integer | **derivada** | `homicidiosHomens + homicidiosMulheres` (camada Silver). |
-| `populacaoTotal` | Float | **opcional** [0..1] | População do município (SIDRA, média anual). Ausente em anos sem cobertura SIDRA. |
-| `taxaHomicidiosPor100k` | Float | derivada · opcional [0..1] | `(homicidiosTotais / populacaoTotal) × 100.000`. Existe só quando há população. |
+| `populacaoTotal` | Float | **opcional** [0..1] | População do município (SIDRA, média anual), **em mil pessoas** (unidade nativa do SIDRA). Ausente em anos sem cobertura SIDRA. |
+| `taxaHomicidiosPor100k` | Float | derivada · opcional [0..1] | `(homicidiosTotais / populacaoTotal) × 100`, com `populacaoTotal` em mil pessoas — equivale a homicídios por 100 mil habitantes. Existe só quando há população. |
 | `pctEnsinoMedioOuMais` | Float | derivada · opcional [0..1] | Indicador sintético de escolaridade (médio completo + superior incompleto + superior completo) / total × 100. |
 | `niveisInstrucao` | NiveisInstrucao [0..1] | **composta · opcional** | Bloco estruturado com a distribuição por nível de instrução (SIDRA). |
 | `fonteIds` | Fonte [1..*] | multivalorada (referência) | Proveniência: quais fontes alimentaram esta observação. |
@@ -394,7 +396,7 @@ As decisões seguem o critério "**dados lidos juntos ficam juntos**" e as regra
 
 | Relacionamento | Cardinalidade | Decisão | Justificativa |
 |---|---|---|---|
-| `Municipio` ◆ `SerieAnual` | 1 : 1..* | **Composição → embedding** (array `seriesAnuais`) | Padrão de acesso dominante é "pegar tudo de um município de uma vez". Crescimento previsível (~1 entrada/ano × ~3 décadas) e muito abaixo de 16 MB. Evita JOIN por ano. |
+| `Municipio` ◆ `SerieAnual` | 1 : 1..* | **Composição → embedding** (array `seriesAnuais`) | Padrão de acesso dominante é "pegar tudo de um município de uma vez". Crescimento previsível (~1 entrada/ano × ~3 décadas) e muito abaixo de 16 MB. Evita JOIN por ano. A cardinalidade mínima `1` (e não `0`) se sustenta porque o Atlas cobre praticamente todos os municípios em ao menos um ano (1989–2023); todo `Municipio` carregado tem pelo menos uma `SerieAnual`. |
 | `SerieAnual` ◆ `NiveisInstrucao` | 1 : 0..1 | **Composição → sub-documento embutido** | Bloco pequeno, lido sempre junto com a série; estrutura fixa de 9 campos; opcional (pode faltar em anos sem SIDRA). |
 | `Municipio` → `UF` → `Regiao` | N : 1 : (N:1) | **Referência** + *Extended Reference* | Taxonomia geográfica estável e reutilizada por milhares de municípios. Mantida em coleções `ufs`/`regioes` para exercitar `$lookup` (Q3). Campos `siglaUF`/`nomeRegiao` também são **copiados** para o documento `Municipio` (subconjunto denormalizado), permitindo filtrar/agregar por região sem join no caminho quente do dashboard. |
 | `SerieAnual` → `Fonte` | N : N (`fonteIds`) | **Referência** | Metadado de proveniência reutilizado por todas as séries de todos os municípios. A pergunta Q7 resolve a origem de cada dado via `$lookup` em `fonteIds`. |
