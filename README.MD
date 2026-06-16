@@ -402,3 +402,411 @@ As decisões seguem o critério "**dados lidos juntos ficam juntos**" e as regra
 | `SerieAnual` → `Fonte` | N : N (`fonteIds`) | **Referência** | Metadado de proveniência reutilizado por todas as séries de todos os municípios. A pergunta Q7 resolve a origem de cada dado via `$lookup` em `fonteIds`. |
 
 > **Padrões de schema antecipados** (Seção 7.f): *Computed* (`homicidiosTotais`, `taxaHomicidiosPor100k`, `pctEnsinoMedioOuMais` pré-calculados na Silver), *Extended Reference* (subconjunto de `UF` embutido em `Municipio`) e *Subset/Embedding* da série anual.
+
+# 6. Projeto do Banco Orientado a Documentos (Mapeamento)
+
+Esta seção apresenta o projeto lógico do banco de dados orientado a documentos utilizado pela aplicação **Atlas da Violência × Indicadores Socioeconômicos por Município**. O objetivo é demonstrar a correspondência entre os dados coletados, o modelo conceitual apresentado na Seção 5 e a implementação final no MongoDB.
+
+A modelagem foi construída considerando os requisitos funcionais definidos na Seção 4 e o padrão de acesso predominante da aplicação, no qual o usuário consulta informações históricas de um município juntamente com seus indicadores socioeconômicos e geográficos.
+
+O princípio adotado foi:
+
+> **Dados lidos juntos permanecem juntos.**
+
+Como a maior parte das consultas necessita acessar simultaneamente os indicadores anuais de violência e escolaridade de um município, optou-se por modelar a série histórica como um array embutido dentro do documento principal.
+
+---
+
+## 6.a Estratégia Geral de Modelagem
+
+O banco será composto por uma coleção principal denominada **municipios**, responsável por armazenar as informações consolidadas provenientes das três fontes de dados utilizadas no projeto:
+
+* Atlas da Violência (Ipea/FBSP);
+* SIDRA/IBGE – Tabela 5919;
+* API de Localidades do IBGE.
+
+Além da coleção principal, serão utilizadas coleções auxiliares para representar entidades reutilizáveis do domínio:
+
+* `ufs`
+* `regioes`
+* `fontes`
+
+A coleção `municipios` conterá tanto informações estáticas do município quanto sua série histórica anual.
+
+Estrutura conceitual:
+
+```text
+Município
+ ├── dados geográficos
+ ├── região
+ ├── UF
+ └── séries anuais
+       ├── homicídios
+       ├── escolaridade
+       ├── população
+       └── fontes
+```
+
+---
+
+## 6.b Quadro A — Correspondência Conceito ↔ Dados Coletados
+
+### Dados Geográficos
+
+| Classe / Propriedade  | Campo da Fonte        | Fonte           | Tipo    |
+| --------------------- | --------------------- | --------------- | ------- |
+| Municipio.codIBGE     | Região ID / Cód. / id | Todas           | Integer |
+| Municipio.nome        | nome                  | API Localidades | String  |
+| Municipio.siglaUF     | UF.sigla              | API Localidades | String  |
+| Municipio.nomeUF      | UF.nome               | API Localidades | String  |
+| Municipio.siglaRegiao | regiao.sigla          | API Localidades | String  |
+| Municipio.nomeRegiao  | regiao.nome           | API Localidades | String  |
+
+---
+
+### Dados de Violência
+
+| Classe / Propriedade             | Campo da Fonte | Fonte          | Tipo    |
+| -------------------------------- | -------------- | -------------- | ------- |
+| SerieAnual.ano                   | Período        | Atlas          | Integer |
+| SerieAnual.homicidiosHomens      | Valor          | Atlas Homens   | Integer |
+| SerieAnual.homicidiosMulheres    | Valor          | Atlas Mulheres | Integer |
+| SerieAnual.homicidiosTotais      | Derivado       | ETL            | Integer |
+| SerieAnual.taxaHomicidiosPor100k | Derivado       | ETL            | Float   |
+
+---
+
+### Dados de Escolaridade
+
+| Classe / Propriedade                  | Campo da Fonte         | Fonte | Tipo  |
+| ------------------------------------- | ---------------------- | ----- | ----- |
+| SerieAnual.populacaoTotal             | Total                  | SIDRA | Float |
+| NiveisInstrucao.semInstrucao          | Sem instrução          | SIDRA | Float |
+| NiveisInstrucao.fundamentalIncompleto | Fundamental incompleto | SIDRA | Float |
+| NiveisInstrucao.fundamentalCompleto   | Fundamental completo   | SIDRA | Float |
+| NiveisInstrucao.medioIncompleto       | Médio incompleto       | SIDRA | Float |
+| NiveisInstrucao.medioCompleto         | Médio completo         | SIDRA | Float |
+| NiveisInstrucao.superiorIncompleto    | Superior incompleto    | SIDRA | Float |
+| NiveisInstrucao.superiorCompleto      | Superior completo      | SIDRA | Float |
+| NiveisInstrucao.naoDeterminado        | Não determinado        | SIDRA | Float |
+| SerieAnual.pctEnsinoMedioOuMais       | Derivado               | ETL   | Float |
+
+---
+
+### Proveniência
+
+| Classe / Propriedade | Campo                          | Origem |
+| -------------------- | ------------------------------ | ------ |
+| SerieAnual.fonteIds  | Fonte(s) utilizadas no cálculo | ETL    |
+
+---
+
+## 6.c Quadro B — Mapeamento para o MongoDB
+
+| Elemento UML    | Tipo no Modelo | Implementação MongoDB | Observação            |
+| --------------- | -------------- | --------------------- | --------------------- |
+| Municipio       | Classe         | Coleção `municipios`  | Coleção principal     |
+| codIBGE         | Simples        | Campo simples         | Identificador natural |
+| nome            | Simples        | Campo simples         | Obrigatório           |
+| siglaUF         | Simples        | Campo simples         | Extended Reference    |
+| nomeUF          | Simples        | Campo simples         | Extended Reference    |
+| siglaRegiao     | Simples        | Campo simples         | Extended Reference    |
+| nomeRegiao      | Simples        | Campo simples         | Extended Reference    |
+| seriesAnuais    | Multivalorado  | Array                 | Embutido              |
+| SerieAnual      | Classe         | Documento embutido    | Lido junto            |
+| niveisInstrucao | Composto       | Documento embutido    | Estrutura fixa        |
+| fonteIds        | Multivalorado  | Array ObjectId        | Referência            |
+| UF              | Classe         | Coleção `ufs`         | Referência            |
+| Regiao          | Classe         | Coleção `regioes`     | Referência            |
+| Fonte           | Classe         | Coleção `fontes`      | Referência            |
+
+---
+
+## 6.d Estrutura das Coleções
+
+### Coleção municipios
+
+A coleção principal representa um município brasileiro e toda a sua série histórica.
+
+#### Exemplo
+
+```json
+{
+  "_id": ObjectId("..."),
+  "codIBGE": 2507507,
+  "nome": "João Pessoa",
+
+  "siglaUF": "PB",
+  "nomeUF": "Paraíba",
+
+  "siglaRegiao": "NE",
+  "nomeRegiao": "Nordeste",
+
+  "seriesAnuais": [
+    {
+      "ano": 2022,
+
+      "homicidiosHomens": 311,
+      "homicidiosMulheres": 29,
+      "homicidiosTotais": 340,
+
+      "populacaoTotal": 825.4,
+
+      "taxaHomicidiosPor100k": 41.19,
+
+      "pctEnsinoMedioOuMais": 36.8,
+
+      "niveisInstrucao": {
+        "semInstrucao": 44.3,
+        "fundamentalIncompleto": 197.2,
+        "fundamentalCompleto": 81.1,
+        "medioIncompleto": 52.0,
+        "medioCompleto": 214.3,
+        "superiorIncompleto": 67.2,
+        "superiorCompleto": 89.5,
+        "naoDeterminado": 1.8
+      },
+
+      "fonteIds": [
+        ObjectId("atlas"),
+        ObjectId("sidra")
+      ]
+    }
+  ]
+}
+```
+
+---
+
+### Coleção ufs
+
+```json
+{
+  "_id": 25,
+  "sigla": "PB",
+  "nome": "Paraíba",
+  "regiaoId": 2
+}
+```
+
+---
+
+### Coleção regioes
+
+```json
+{
+  "_id": 2,
+  "sigla": "NE",
+  "nome": "Nordeste"
+}
+```
+
+---
+
+### Coleção fontes
+
+```json
+{
+  "_id": ObjectId("..."),
+  "nome": "Atlas da Violência",
+  "origem": "Ipea / FBSP",
+  "portal": "https://www.ipea.gov.br/atlasviolencia",
+  "licenca": "Uso acadêmico com citação obrigatória"
+}
+```
+
+---
+
+## 6.e Decisões de Embedding × Referência
+
+### Município → Série Anual
+
+#### Decisão
+
+Embedding.
+
+#### Justificativa
+
+A aplicação realiza consultas centradas em um município específico e sua trajetória histórica.
+
+Exemplos:
+
+* Evolução anual da violência;
+* Evolução da escolaridade;
+* Relação violência × escolaridade;
+* Ranking por ano.
+
+Como os dados são lidos em conjunto, armazená-los no mesmo documento reduz operações de I/O e elimina joins.
+
+---
+
+### Série Anual → Níveis de Instrução
+
+#### Decisão
+
+Embedding.
+
+#### Justificativa
+
+O conjunto possui apenas nove atributos, tamanho reduzido e é sempre consumido juntamente com a série anual correspondente.
+
+---
+
+### Município → UF → Região
+
+#### Decisão
+
+Referência + Extended Reference Pattern.
+
+#### Justificativa
+
+A mesma UF é compartilhada por centenas de municípios.
+
+A mesma região é compartilhada por milhares de municípios.
+
+Por esse motivo as entidades permanecem em coleções próprias.
+
+Entretanto, os campos:
+
+* siglaUF
+* nomeUF
+* siglaRegiao
+* nomeRegiao
+
+são replicados no documento principal para acelerar filtros e agregações.
+
+---
+
+### Série Anual → Fonte
+
+#### Decisão
+
+Referência.
+
+#### Justificativa
+
+As fontes são reutilizadas por todos os documentos do banco.
+
+Essa abordagem reduz redundância e permite responder consultas de proveniência por meio de `$lookup`.
+
+---
+
+## 6.f Índices Planejados
+
+Para atender aos requisitos de desempenho da Seção 7, serão criados índices sobre os campos mais consultados.
+
+### Índice por Município
+
+```javascript
+db.municipios.createIndex(
+  { codIBGE: 1 }
+)
+```
+
+---
+
+### Índice por Região
+
+```javascript
+db.municipios.createIndex(
+  { nomeRegiao: 1 }
+)
+```
+
+---
+
+### Índice por Ano da Série
+
+```javascript
+db.municipios.createIndex(
+  { "seriesAnuais.ano": 1 }
+)
+```
+
+---
+
+### Índice Composto (ESR)
+
+```javascript
+db.municipios.createIndex(
+  {
+    "seriesAnuais.ano": 1,
+    "seriesAnuais.taxaHomicidiosPor100k": -1
+  }
+)
+```
+
+Este índice atende diretamente às consultas de ranking (Q1).
+
+---
+
+## 6.g Alinhamento com os Requisitos de Consulta
+
+| Pergunta | Estrutura Utilizada                          |
+| -------- | -------------------------------------------- |
+| Q1       | seriesAnuais                                 |
+| Q2       | seriesAnuais                                 |
+| Q3       | nomeRegiao                                   |
+| Q4       | taxaHomicidiosPor100k + pctEnsinoMedioOuMais |
+| Q5       | $elemMatch em seriesAnuais                   |
+| Q6       | populacaoTotal                               |
+| Q7       | fonteIds + $lookup                           |
+
+---
+
+## 6.h Padrões de Modelagem Aplicados
+
+### Embedded Document Pattern
+
+Aplicado em:
+
+* seriesAnuais
+* niveisInstrucao
+
+---
+
+### Computed Pattern
+
+Aplicado em:
+
+* homicidiosTotais
+* taxaHomicidiosPor100k
+* pctEnsinoMedioOuMais
+
+Esses valores são calculados durante a camada Silver do ETL.
+
+---
+
+### Extended Reference Pattern
+
+Aplicado em:
+
+* siglaUF
+* nomeUF
+* siglaRegiao
+* nomeRegiao
+
+---
+
+### Subset Pattern
+
+Apenas os atributos geográficos necessários para consulta são copiados para o documento principal.
+
+---
+
+## 6.i Coleções Finais do Projeto
+
+Ao final da execução do pipeline ETL o banco MongoDB será composto pelas seguintes coleções:
+
+| Coleção | Finalidade |
+|----------|-----------|
+| `municipios` | Coleção principal, contendo dados consolidados e séries anuais |
+| `ufs` | Catálogo geográfico auxiliar das unidades federativas |
+| `regioes` | Catálogo geográfico auxiliar das regiões brasileiras |
+| `fontes` | Coleção de proveniência usada em consultas com `$lookup` |
+
+As coleções `ufs` e `regioes` serão mantidas como catálogos geográficos de referência, úteis para integridade semântica, carga inicial e eventual enriquecimento dos dados. Entretanto, as consultas analíticas principais não dependem de `$lookup` nessas coleções, pois os campos `siglaUF`, `nomeUF`, `siglaRegiao` e `nomeRegiao` são denormalizados no documento `municipios` por meio do padrão Extended Reference.
+
+Dessa forma, a Q3 agrupa diretamente por `siglaRegiao` ou `nomeRegiao` a partir da coleção `municipios`, evitando join no caminho quente do dashboard.
+
+O uso obrigatório de `$lookup` no projeto será atendido pela Q7, que relaciona `seriesAnuais.fonteIds` com a coleção `fontes` para exibir a proveniência dos dados utilizados.
