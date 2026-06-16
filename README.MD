@@ -178,7 +178,7 @@ Portanto, não há tratamento de dado pessoal a registrar à luz da LGPD. Ainda 
 | `Valor` | Integer | Integer | Contagem absoluta de homicídios registrados no município no ano de referência, para o sexo do arquivo. Valores `0` são registros válidos (ausência de ocorrências). | `11` | `11` |
 
 **Observações:**
-- O ETL gera, na camada Silver, um campo calculado `homicidiosTotais = homicídiosHomens + homicídiosMulheres` por (município, ano), além de `taxaHomicidiosPor100k` = `(homicídiosTotais / populacaoTotal) × 100.000` — usando a população da Fonte 2.
+- O ETL gera, na camada Silver, um campo calculado `homicidiosTotais = homicídiosHomens + homicídiosMulheres` por (município, ano), além de `taxaHomicidiosPor100k` = `(homicídiosTotais / populacaoTotal) × 100` — usando a população da Fonte 2. O fator é `× 100` (e não `× 100.000`) porque `populacaoTotal` está expressa em **mil pessoas** (unidade nativa do SIDRA); `homicídios / (pop em milhares) × 100` equivale a `homicídios / (pop absoluta) × 100.000`.
 - Municípios com `Valor = 0` em todos os anos são retidos; municípios inexistentes em um dado ano (criados ou extintos) terão o ano ausente no array `seriesAnuais`.
 
 ---
@@ -247,3 +247,566 @@ Portanto, não há tratamento de dado pessoal a registrar à luz da LGPD. Ainda 
 | Q7 | Para os indicadores exibidos, qual a fonte de origem de cada dado utilizado?                                                                       | `$lookup` de `seriesAnuais.fonteIds` → coleção `fontes`                               | Tabela com proveniência |
 
 ---
+
+## 5. Modelo Conceitual (UML)
+
+> Checkpoint **C2** — Atlas da Violência × Indicadores Socioeconômicos por Município
+> O diagrama abaixo é **conceitual na estrutura** — entidades, atributos, relacionamentos e cardinalidades independem de implementação — mas já vem **anotado com a estratégia de mapeamento para o MongoDB** por meio de estereótipos (`<<...>>`). Cada estereótipo antecipa a decisão de embedding × referência detalhada em 5.c e materializada no modelo lógico da Seção 6; eles são uma camada de anotação sobre o conceitual, não parte da semântica conceitual em si.
+
+## Diagrama de classes
+
+```mermaid
+classDiagram
+    direction LR
+
+    class Regiao {
+        <<referência>>
+        +int codRegiao
+        +string sigla
+        +string nome
+    }
+
+    class UF {
+        <<referência>>
+        +int codUF
+        +string sigla
+        +string nome
+    }
+
+    class Municipio {
+        <<coleção raiz>>
+        +int codIBGE
+        +string nome
+    }
+
+    class SerieAnual {
+        <<embutida>>
+        +int ano
+        +int homicidiosHomens
+        +int homicidiosMulheres
+        +int /homicidiosTotais
+        +float populacaoTotal [0..1]
+        +float /taxaHomicidiosPor100k [0..1]
+        +float /pctEnsinoMedioOuMais [0..1]
+    }
+
+    class NiveisInstrucao {
+        <<atributo composto>>
+        +float semInstrucao
+        +float fundamentalIncompleto
+        +float fundamentalCompleto
+        +float medioIncompleto
+        +float medioCompleto
+        +float superiorIncompleto
+        +float superiorCompleto
+        +float naoDeterminado
+    }
+
+    class Fonte {
+        <<referência>>
+        +int codFonte
+        +string nome
+        +string origem
+        +string portal
+        +string licenca
+    }
+
+    UF "1..*" --> "1" Regiao : pertence a
+    Municipio "1..*" --> "1" UF : pertence a
+    Municipio "1" *-- "1..*" SerieAnual : seriesAnuais
+    SerieAnual "1" *-- "0..1" NiveisInstrucao : niveisInstrucao
+    SerieAnual "0..*" --> "1..*" Fonte : fonteIds
+```
+
+> Legenda das setas: `*--` = composição (losango preenchido no todo); `-->` = associação por referência, **apontando no sentido em que a referência é navegada** (de `Municipio` para `UF` e desta para `Regiao`, pois é o documento `Municipio` que guarda a chave — ver 5.c). Atributos prefixados com `/` são **derivados** (calculados na camada Silver); o sufixo `[0..1]` indica atributo **opcional**. As cardinalidades acompanham cada extremidade.
+>
+> **Nota sobre Região/UF/Município:** conceitualmente "contém" é uma agregação (todo-parte). Optou-se por modelá-la como **associação por referência** (`-->`), e não como agregação (`o--`), por coerência com a implementação no MongoDB — a hierarquia geográfica vive em coleções de referência (`regioes`/`ufs`) e o município aponta para elas, conforme 5.c.
+
+---
+
+## 5.a Catálogo de classes e atributos
+
+### `Municipio` — entidade central (uma instância por município, ~5.570)
+
+| Atributo | Tipo | Classificação | Descrição |
+|---|---|---|---|
+| `codIBGE` | Integer | simples · **identificador** | Código IBGE de 7 dígitos. Chave de junção universal (= `Região ID` do Atlas = `Cód.` do SIDRA = `id` da API Localidades). |
+| `nome` | String | **simples** | Nome oficial do município. |
+| `seriesAnuais` | SerieAnual [1..*] | **multivalorada** (composição) | Série histórica anual; uma entrada por ano com dado disponível. |
+
+### `SerieAnual` — uma observação anual do município (embutida)
+
+| Atributo | Tipo | Classificação | Descrição |
+|---|---|---|---|
+| `ano` | Integer | simples | Ano de referência (1989–2023). |
+| `homicidiosHomens` | Integer | simples | Contagem absoluta (Atlas, arquivo masculino). |
+| `homicidiosMulheres` | Integer | simples | Contagem absoluta (Atlas, arquivo feminino). |
+| `homicidiosTotais` | Integer | **derivada** | `homicidiosHomens + homicidiosMulheres` (camada Silver). |
+| `populacaoTotal` | Float | **opcional** [0..1] | População do município (SIDRA, média anual), **em mil pessoas** (unidade nativa do SIDRA). Ausente em anos sem cobertura SIDRA. |
+| `taxaHomicidiosPor100k` | Float | derivada · opcional [0..1] | `(homicidiosTotais / populacaoTotal) × 100`, com `populacaoTotal` em mil pessoas — equivale a homicídios por 100 mil habitantes. Existe só quando há população. |
+| `pctEnsinoMedioOuMais` | Float | derivada · opcional [0..1] | Indicador sintético de escolaridade (médio completo + superior incompleto + superior completo) / total × 100. |
+| `niveisInstrucao` | NiveisInstrucao [0..1] | **composta · opcional** | Bloco estruturado com a distribuição por nível de instrução (SIDRA). |
+| `fonteIds` | Fonte [1..*] | multivalorada (referência) | Proveniência: quais fontes alimentaram esta observação. |
+
+### `NiveisInstrucao` — atributo composto (sub-bloco da série)
+
+| Atributo | Tipo | Descrição |
+|---|---|---|
+| `semInstrucao` … `naoDeterminado` | Float [0..1] cada | População (mil pessoas) em cada um dos 9 níveis de instrução. Campos individualmente opcionais (células `"..."` suprimidas → `null`). |
+
+### `UF` e `Regiao` — taxonomia geográfica (coleções de referência)
+
+| Classe | Atributos | Descrição |
+|---|---|---|
+| `UF` | `codUF` (Int, id), `sigla` (String), `nome` (String) | 27 unidades federativas (IBGE Localidades). |
+| `Regiao` | `codRegiao` (Int, id), `sigla` (String), `nome` (String) | 5 regiões geográficas (N, NE, CO, SE, S). |
+
+### `Fonte` — proveniência dos dados (coleção de referência)
+
+| Atributo | Tipo | Descrição |
+|---|---|---|
+| `codFonte` | Integer (id) | Identificador da fonte. |
+| `nome` | String | Ex.: "Atlas da Violência / Ipea". |
+| `origem` | String | Ex.: "SIM / Datasus / MS". |
+| `portal` | String | URL de acesso. |
+| `licenca` | String | Condições de uso (citação obrigatória, etc.). |
+
+---
+
+## 5.b Checklist dos elementos obrigatórios
+
+| Elemento exigido pelo enunciado | Onde está satisfeito |
+|---|---|
+| **Propriedade simples** | `Municipio.nome` (String); `SerieAnual.ano` (Integer) |
+| **Propriedade multivalorada** | `Municipio.seriesAnuais` (1..* `SerieAnual`); `SerieAnual.fonteIds` (1..* `Fonte`) |
+| **Propriedade composta** | `SerieAnual.niveisInstrucao` (classe `NiveisInstrucao`, atributo estruturado) |
+| **Propriedade opcional** | `SerieAnual.populacaoTotal` [0..1]; `niveisInstrucao` [0..1]; derivados `taxa…`/`pct…` [0..1] |
+| **Agregação / Composição** (obrigatório ≥1) | `Municipio ◆—— SerieAnual` **e** `SerieAnual ◆—— NiveisInstrucao` |
+| *(Opcional)* Associação **1:N** | `Regiao` 1—N `UF`; `UF` 1—N `Municipio` |
+| *(Opcional)* Associação **N:N** | `SerieAnual` N—N `Fonte` (via `fonteIds`) |
+| *(Opcional)* Generalização | **Não aplicada** — ver nota abaixo |
+
+> **Nota sobre generalização:** foi considerada uma superclasse `Homicídios` especializada em `…Homens`/`…Mulheres`, mas isso seria artificial: o sexo é apenas a dimensão de dois atributos numéricos da mesma observação anual, não uma hierarquia de comportamento. Optou-se por **não** forçar generalização, mantendo o modelo fiel ao domínio.
+
+---
+
+## 5.c Relacionamentos e decisões (prévia da Seção 6)
+
+As decisões seguem o critério "**dados lidos juntos ficam juntos**" e as regras de Coupal (2019) — cardinalidade, frequência de leitura conjunta, crescimento e limite de 16 MB do BSON.
+
+| Relacionamento | Cardinalidade | Decisão | Justificativa |
+|---|---|---|---|
+| `Municipio` ◆ `SerieAnual` | 1 : 1..* | **Composição → embedding** (array `seriesAnuais`) | Padrão de acesso dominante é "pegar tudo de um município de uma vez". Crescimento previsível (~1 entrada/ano × ~3 décadas) e muito abaixo de 16 MB. Evita JOIN por ano. A cardinalidade mínima `1` (e não `0`) se sustenta porque o Atlas cobre praticamente todos os municípios em ao menos um ano (1989–2023); todo `Municipio` carregado tem pelo menos uma `SerieAnual`. |
+| `SerieAnual` ◆ `NiveisInstrucao` | 1 : 0..1 | **Composição → sub-documento embutido** | Bloco pequeno, lido sempre junto com a série; estrutura fixa de 9 campos; opcional (pode faltar em anos sem SIDRA). |
+| `Municipio` → `UF` → `Regiao` | N : 1 : (N:1) | **Referência** + *Extended Reference* | Taxonomia geográfica estável e reutilizada por milhares de municípios. Mantida em coleções `ufs`/`regioes` para exercitar `$lookup` (Q3). Campos `siglaUF`/`nomeRegiao` também são **copiados** para o documento `Municipio` (subconjunto denormalizado), permitindo filtrar/agregar por região sem join no caminho quente do dashboard. |
+| `SerieAnual` → `Fonte` | N : N (`fonteIds`) | **Referência** | Metadado de proveniência reutilizado por todas as séries de todos os municípios. A pergunta Q7 resolve a origem de cada dado via `$lookup` em `fonteIds`. |
+
+> **Padrões de schema antecipados** (Seção 7.f): *Computed* (`homicidiosTotais`, `taxaHomicidiosPor100k`, `pctEnsinoMedioOuMais` pré-calculados na Silver), *Extended Reference* (subconjunto de `UF` embutido em `Municipio`) e *Subset/Embedding* da série anual.
+
+# 6. Projeto do Banco Orientado a Documentos (Mapeamento)
+
+Esta seção apresenta o projeto lógico do banco de dados orientado a documentos utilizado pela aplicação **Atlas da Violência × Indicadores Socioeconômicos por Município**. O objetivo é demonstrar a correspondência entre os dados coletados, o modelo conceitual apresentado na Seção 5 e a implementação final no MongoDB.
+
+A modelagem foi construída considerando os requisitos funcionais definidos na Seção 4 e o padrão de acesso predominante da aplicação, no qual o usuário consulta informações históricas de um município juntamente com seus indicadores socioeconômicos e geográficos.
+
+O princípio adotado foi:
+
+> **Dados lidos juntos permanecem juntos.**
+
+Como a maior parte das consultas necessita acessar simultaneamente os indicadores anuais de violência e escolaridade de um município, optou-se por modelar a série histórica como um array embutido dentro do documento principal.
+
+---
+
+## 6.a Estratégia Geral de Modelagem
+
+O banco será composto por uma coleção principal denominada **municipios**, responsável por armazenar as informações consolidadas provenientes das três fontes de dados utilizadas no projeto:
+
+* Atlas da Violência (Ipea/FBSP);
+* SIDRA/IBGE – Tabela 5919;
+* API de Localidades do IBGE.
+
+Além da coleção principal, serão utilizadas coleções auxiliares para representar entidades reutilizáveis do domínio:
+
+* `ufs`
+* `regioes`
+* `fontes`
+
+A coleção `municipios` conterá tanto informações estáticas do município quanto sua série histórica anual.
+
+Estrutura conceitual:
+
+```text
+Município
+ ├── dados geográficos
+ ├── região
+ ├── UF
+ └── séries anuais
+       ├── homicídios
+       ├── escolaridade
+       ├── população
+       └── fontes
+```
+
+---
+
+## 6.b Quadro A — Correspondência Conceito ↔ Dados Coletados
+
+### Dados Geográficos
+
+| Classe / Propriedade  | Campo da Fonte        | Fonte           | Tipo    |
+| --------------------- | --------------------- | --------------- | ------- |
+| Municipio.codIBGE     | Região ID / Cód. / id | Todas           | Integer |
+| Municipio.nome        | nome                  | API Localidades | String  |
+| Municipio.siglaUF     | UF.sigla              | API Localidades | String  |
+| Municipio.nomeUF      | UF.nome               | API Localidades | String  |
+| Municipio.siglaRegiao | regiao.sigla          | API Localidades | String  |
+| Municipio.nomeRegiao  | regiao.nome           | API Localidades | String  |
+
+---
+
+### Dados de Violência
+
+| Classe / Propriedade             | Campo da Fonte | Fonte          | Tipo    |
+| -------------------------------- | -------------- | -------------- | ------- |
+| SerieAnual.ano                   | Período        | Atlas          | Integer |
+| SerieAnual.homicidiosHomens      | Valor          | Atlas Homens   | Integer |
+| SerieAnual.homicidiosMulheres    | Valor          | Atlas Mulheres | Integer |
+| SerieAnual.homicidiosTotais      | Derivado       | ETL            | Integer |
+| SerieAnual.taxaHomicidiosPor100k | Derivado       | ETL            | Float   |
+
+---
+
+### Dados de Escolaridade
+
+| Classe / Propriedade                  | Campo da Fonte         | Fonte | Tipo  |
+| ------------------------------------- | ---------------------- | ----- | ----- |
+| SerieAnual.populacaoTotal             | Total                  | SIDRA | Float |
+| NiveisInstrucao.semInstrucao          | Sem instrução          | SIDRA | Float |
+| NiveisInstrucao.fundamentalIncompleto | Fundamental incompleto | SIDRA | Float |
+| NiveisInstrucao.fundamentalCompleto   | Fundamental completo   | SIDRA | Float |
+| NiveisInstrucao.medioIncompleto       | Médio incompleto       | SIDRA | Float |
+| NiveisInstrucao.medioCompleto         | Médio completo         | SIDRA | Float |
+| NiveisInstrucao.superiorIncompleto    | Superior incompleto    | SIDRA | Float |
+| NiveisInstrucao.superiorCompleto      | Superior completo      | SIDRA | Float |
+| NiveisInstrucao.naoDeterminado        | Não determinado        | SIDRA | Float |
+| SerieAnual.pctEnsinoMedioOuMais       | Derivado               | ETL   | Float |
+
+---
+
+### Proveniência
+
+| Classe / Propriedade | Campo                          | Origem |
+| -------------------- | ------------------------------ | ------ |
+| SerieAnual.fonteIds  | Fonte(s) utilizadas no cálculo | ETL    |
+
+---
+
+## 6.c Quadro B — Mapeamento para o MongoDB
+
+| Elemento UML    | Tipo no Modelo | Implementação MongoDB | Observação            |
+| --------------- | -------------- | --------------------- | --------------------- |
+| Municipio       | Classe         | Coleção `municipios`  | Coleção principal     |
+| codIBGE         | Simples        | Campo simples         | Identificador natural |
+| nome            | Simples        | Campo simples         | Obrigatório           |
+| siglaUF         | Simples        | Campo simples         | Extended Reference    |
+| nomeUF          | Simples        | Campo simples         | Extended Reference    |
+| siglaRegiao     | Simples        | Campo simples         | Extended Reference    |
+| nomeRegiao      | Simples        | Campo simples         | Extended Reference    |
+| seriesAnuais    | Multivalorado  | Array                 | Embutido              |
+| SerieAnual      | Classe         | Documento embutido    | Lido junto            |
+| niveisInstrucao | Composto       | Documento embutido    | Estrutura fixa        |
+| fonteIds        | Multivalorado  | Array ObjectId        | Referência            |
+| UF              | Classe         | Coleção `ufs`         | Referência            |
+| Regiao          | Classe         | Coleção `regioes`     | Referência            |
+| Fonte           | Classe         | Coleção `fontes`      | Referência            |
+
+---
+
+## 6.d Estrutura das Coleções
+
+### Coleção municipios
+
+A coleção principal representa um município brasileiro e toda a sua série histórica.
+
+#### Exemplo
+
+```json
+{
+  "_id": ObjectId("..."),
+  "codIBGE": 2507507,
+  "nome": "João Pessoa",
+
+  "siglaUF": "PB",
+  "nomeUF": "Paraíba",
+
+  "siglaRegiao": "NE",
+  "nomeRegiao": "Nordeste",
+
+  "seriesAnuais": [
+    {
+      "ano": 2022,
+
+      "homicidiosHomens": 311,
+      "homicidiosMulheres": 29,
+      "homicidiosTotais": 340,
+
+      "populacaoTotal": 825.4,
+
+      "taxaHomicidiosPor100k": 41.19,
+
+      "pctEnsinoMedioOuMais": 36.8,
+
+      "niveisInstrucao": {
+        "semInstrucao": 44.3,
+        "fundamentalIncompleto": 197.2,
+        "fundamentalCompleto": 81.1,
+        "medioIncompleto": 52.0,
+        "medioCompleto": 214.3,
+        "superiorIncompleto": 67.2,
+        "superiorCompleto": 89.5,
+        "naoDeterminado": 1.8
+      },
+
+      "fonteIds": [
+        ObjectId("atlas"),
+        ObjectId("sidra")
+      ]
+    }
+  ]
+}
+```
+
+---
+
+### Coleção ufs
+
+```json
+{
+  "_id": 25,
+  "sigla": "PB",
+  "nome": "Paraíba",
+  "regiaoId": 2
+}
+```
+
+---
+
+### Coleção regioes
+
+```json
+{
+  "_id": 2,
+  "sigla": "NE",
+  "nome": "Nordeste"
+}
+```
+
+---
+
+### Coleção fontes
+
+```json
+{
+  "_id": ObjectId("..."),
+  "nome": "Atlas da Violência",
+  "origem": "Ipea / FBSP",
+  "portal": "https://www.ipea.gov.br/atlasviolencia",
+  "licenca": "Uso acadêmico com citação obrigatória"
+}
+```
+
+---
+
+## 6.e Decisões de Embedding × Referência
+
+### Município → Série Anual
+
+#### Decisão
+
+Embedding.
+
+#### Justificativa
+
+A aplicação realiza consultas centradas em um município específico e sua trajetória histórica.
+
+Exemplos:
+
+* Evolução anual da violência;
+* Evolução da escolaridade;
+* Relação violência × escolaridade;
+* Ranking por ano.
+
+Como os dados são lidos em conjunto, armazená-los no mesmo documento reduz operações de I/O e elimina joins.
+
+---
+
+### Série Anual → Níveis de Instrução
+
+#### Decisão
+
+Embedding.
+
+#### Justificativa
+
+O conjunto possui apenas nove atributos, tamanho reduzido e é sempre consumido juntamente com a série anual correspondente.
+
+---
+
+### Município → UF → Região
+
+#### Decisão
+
+Referência + Extended Reference Pattern.
+
+#### Justificativa
+
+A mesma UF é compartilhada por centenas de municípios.
+
+A mesma região é compartilhada por milhares de municípios.
+
+Por esse motivo as entidades permanecem em coleções próprias.
+
+Entretanto, os campos:
+
+* siglaUF
+* nomeUF
+* siglaRegiao
+* nomeRegiao
+
+são replicados no documento principal para acelerar filtros e agregações.
+
+---
+
+### Série Anual → Fonte
+
+#### Decisão
+
+Referência.
+
+#### Justificativa
+
+As fontes são reutilizadas por todos os documentos do banco.
+
+Essa abordagem reduz redundância e permite responder consultas de proveniência por meio de `$lookup`.
+
+---
+
+## 6.f Índices Planejados
+
+Para atender aos requisitos de desempenho da Seção 7, serão criados índices sobre os campos mais consultados.
+
+### Índice por Município
+
+```javascript
+db.municipios.createIndex(
+  { codIBGE: 1 }
+)
+```
+
+---
+
+### Índice por Região
+
+```javascript
+db.municipios.createIndex(
+  { nomeRegiao: 1 }
+)
+```
+
+---
+
+### Índice por Ano da Série
+
+```javascript
+db.municipios.createIndex(
+  { "seriesAnuais.ano": 1 }
+)
+```
+
+---
+
+### Índice Composto (ESR)
+
+```javascript
+db.municipios.createIndex(
+  {
+    "seriesAnuais.ano": 1,
+    "seriesAnuais.taxaHomicidiosPor100k": -1
+  }
+)
+```
+
+Este índice atende diretamente às consultas de ranking (Q1).
+
+---
+
+## 6.g Alinhamento com os Requisitos de Consulta
+
+| Pergunta | Estrutura Utilizada                          |
+| -------- | -------------------------------------------- |
+| Q1       | seriesAnuais                                 |
+| Q2       | seriesAnuais                                 |
+| Q3       | nomeRegiao                                   |
+| Q4       | taxaHomicidiosPor100k + pctEnsinoMedioOuMais |
+| Q5       | $elemMatch em seriesAnuais                   |
+| Q6       | populacaoTotal                               |
+| Q7       | fonteIds + $lookup                           |
+
+---
+
+## 6.h Padrões de Modelagem Aplicados
+
+### Embedded Document Pattern
+
+Aplicado em:
+
+* seriesAnuais
+* niveisInstrucao
+
+---
+
+### Computed Pattern
+
+Aplicado em:
+
+* homicidiosTotais
+* taxaHomicidiosPor100k
+* pctEnsinoMedioOuMais
+
+Esses valores são calculados durante a camada Silver do ETL.
+
+---
+
+### Extended Reference Pattern
+
+Aplicado em:
+
+* siglaUF
+* nomeUF
+* siglaRegiao
+* nomeRegiao
+
+---
+
+### Subset Pattern
+
+Apenas os atributos geográficos necessários para consulta são copiados para o documento principal.
+
+---
+
+## 6.i Coleções Finais do Projeto
+
+Ao final da execução do pipeline ETL o banco MongoDB será composto pelas seguintes coleções:
+
+| Coleção | Finalidade |
+|----------|-----------|
+| `municipios` | Coleção principal, contendo dados consolidados e séries anuais |
+| `ufs` | Catálogo geográfico auxiliar das unidades federativas |
+| `regioes` | Catálogo geográfico auxiliar das regiões brasileiras |
+| `fontes` | Coleção de proveniência usada em consultas com `$lookup` |
+
+As coleções `ufs` e `regioes` serão mantidas como catálogos geográficos de referência, úteis para integridade semântica, carga inicial e eventual enriquecimento dos dados. Entretanto, as consultas analíticas principais não dependem de `$lookup` nessas coleções, pois os campos `siglaUF`, `nomeUF`, `siglaRegiao` e `nomeRegiao` são denormalizados no documento `municipios` por meio do padrão Extended Reference.
+
+Dessa forma, a Q3 agrupa diretamente por `siglaRegiao` ou `nomeRegiao` a partir da coleção `municipios`, evitando join no caminho quente do dashboard.
+
+O uso obrigatório de `$lookup` no projeto será atendido pela Q7, que relaciona `seriesAnuais.fonteIds` com a coleção `fontes` para exibir a proveniência dos dados utilizados.
