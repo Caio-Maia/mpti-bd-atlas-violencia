@@ -248,7 +248,7 @@ Portanto, não há tratamento de dado pessoal a registrar à luz da LGPD. Ainda 
 
 ---
 
-# 5. Modelo Conceitual (UML)
+## 5. Modelo Conceitual (UML)
 
 > Checkpoint **C2** — Atlas da Violência × Indicadores Socioeconômicos por Município
 > O diagrama abaixo é **conceitual na estrutura** — entidades, atributos, relacionamentos e cardinalidades independem de implementação — mas já vem **anotado com a estratégia de mapeamento para o MongoDB** por meio de estereótipos (`<<...>>`). Cada estereótipo antecipa a decisão de embedding × referência detalhada em 5.c e materializada no modelo lógico da Seção 6; eles são uma camada de anotação sobre o conceitual, não parte da semântica conceitual em si.
