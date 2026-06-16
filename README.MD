@@ -709,7 +709,7 @@ db.municipios.createIndex(
 
 ```javascript
 db.municipios.createIndex(
-  { siglaRegiao: 1 }
+  { nomeRegiao: 1 }
 )
 ```
 
@@ -798,11 +798,15 @@ Apenas os atributos geográficos necessários para consulta são copiados para o
 
 Ao final da execução do pipeline ETL o banco MongoDB será composto pelas seguintes coleções:
 
-| Coleção    | Finalidade                        |
-| ---------- | --------------------------------- |
-| municipios | Dados consolidados da aplicação   |
-| ufs        | Catálogo das unidades federativas |
-| regioes    | Catálogo das regiões brasileiras  |
-| fontes     | Proveniência dos dados            |
+| Coleção | Finalidade |
+|----------|-----------|
+| `municipios` | Coleção principal, contendo dados consolidados e séries anuais |
+| `ufs` | Catálogo geográfico auxiliar das unidades federativas |
+| `regioes` | Catálogo geográfico auxiliar das regiões brasileiras |
+| `fontes` | Coleção de proveniência usada em consultas com `$lookup` |
 
-A coleção **municipios** será responsável por mais de 90% das consultas executadas pela aplicação e pelo dashboard analítico, enquanto as demais funcionarão como coleções de apoio para enriquecimento semântico, integridade dos dados e consultas com `$lookup`.
+AAs coleções `ufs` e `regioes` serão mantidas como catálogos geográficos de referência, úteis para integridade semântica, carga inicial e eventual enriquecimento dos dados. Entretanto, as consultas analíticas principais não dependem de `$lookup` nessas coleções, pois os campos `siglaUF`, `nomeUF`, `siglaRegiao` e `nomeRegiao` são denormalizados no documento `municipios` por meio do padrão Extended Reference.
+
+Dessa forma, a Q3 agrupa diretamente por `siglaRegiao` ou `nomeRegiao` a partir da coleção `municipios`, evitando join no caminho quente do dashboard.
+
+O uso obrigatório de `$lookup` no projeto será atendido pela Q7, que relaciona `seriesAnuais.fonteIds` com a coleção `fontes` para exibir a proveniência dos dados utilizados.
