@@ -417,7 +417,7 @@ Como a maior parte das consultas necessita acessar simultaneamente os indicadore
 
 ---
 
-# 6.1 Estratégia Geral de Modelagem
+## 6.a Estratégia Geral de Modelagem
 
 O banco será composto por uma coleção principal denominada **municipios**, responsável por armazenar as informações consolidadas provenientes das três fontes de dados utilizadas no projeto:
 
@@ -449,9 +449,9 @@ Município
 
 ---
 
-# 6.2 Quadro A — Correspondência Conceito ↔ Dados Coletados
+## 6.b Quadro A — Correspondência Conceito ↔ Dados Coletados
 
-## Dados Geográficos
+### Dados Geográficos
 
 | Classe / Propriedade  | Campo da Fonte        | Fonte           | Tipo    |
 | --------------------- | --------------------- | --------------- | ------- |
@@ -464,7 +464,7 @@ Município
 
 ---
 
-## Dados de Violência
+### Dados de Violência
 
 | Classe / Propriedade             | Campo da Fonte | Fonte          | Tipo    |
 | -------------------------------- | -------------- | -------------- | ------- |
@@ -476,7 +476,7 @@ Município
 
 ---
 
-## Dados de Escolaridade
+### Dados de Escolaridade
 
 | Classe / Propriedade                  | Campo da Fonte         | Fonte | Tipo  |
 | ------------------------------------- | ---------------------- | ----- | ----- |
@@ -493,7 +493,7 @@ Município
 
 ---
 
-## Proveniência
+### Proveniência
 
 | Classe / Propriedade | Campo                          | Origem |
 | -------------------- | ------------------------------ | ------ |
@@ -501,7 +501,7 @@ Município
 
 ---
 
-# 6.3 Quadro B — Mapeamento para o MongoDB
+## 6.c Quadro B — Mapeamento para o MongoDB
 
 | Elemento UML    | Tipo no Modelo | Implementação MongoDB | Observação            |
 | --------------- | -------------- | --------------------- | --------------------- |
@@ -522,13 +522,13 @@ Município
 
 ---
 
-# 6.4 Estrutura das Coleções
+## 6.d Estrutura das Coleções
 
-## Coleção municipios
+### Coleção municipios
 
 A coleção principal representa um município brasileiro e toda a sua série histórica.
 
-### Exemplo
+#### Exemplo
 
 ```json
 {
@@ -578,7 +578,7 @@ A coleção principal representa um município brasileiro e toda a sua série hi
 
 ---
 
-## Coleção ufs
+### Coleção ufs
 
 ```json
 {
@@ -591,7 +591,7 @@ A coleção principal representa um município brasileiro e toda a sua série hi
 
 ---
 
-## Coleção regioes
+### Coleção regioes
 
 ```json
 {
@@ -603,7 +603,7 @@ A coleção principal representa um município brasileiro e toda a sua série hi
 
 ---
 
-## Coleção fontes
+### Coleção fontes
 
 ```json
 {
@@ -617,15 +617,15 @@ A coleção principal representa um município brasileiro e toda a sua série hi
 
 ---
 
-# 6.5 Decisões de Embedding × Referência
+## 6.e Decisões de Embedding × Referência
 
-## Município → Série Anual
+### Município → Série Anual
 
-### Decisão
+#### Decisão
 
 Embedding.
 
-### Justificativa
+#### Justificativa
 
 A aplicação realiza consultas centradas em um município específico e sua trajetória histórica.
 
@@ -640,25 +640,25 @@ Como os dados são lidos em conjunto, armazená-los no mesmo documento reduz ope
 
 ---
 
-## Série Anual → Níveis de Instrução
+### Série Anual → Níveis de Instrução
 
-### Decisão
+#### Decisão
 
 Embedding.
 
-### Justificativa
+#### Justificativa
 
 O conjunto possui apenas nove atributos, tamanho reduzido e é sempre consumido juntamente com a série anual correspondente.
 
 ---
 
-## Município → UF → Região
+### Município → UF → Região
 
-### Decisão
+#### Decisão
 
 Referência + Extended Reference Pattern.
 
-### Justificativa
+#### Justificativa
 
 A mesma UF é compartilhada por centenas de municípios.
 
@@ -677,13 +677,13 @@ são replicados no documento principal para acelerar filtros e agregações.
 
 ---
 
-## Série Anual → Fonte
+### Série Anual → Fonte
 
-### Decisão
+#### Decisão
 
 Referência.
 
-### Justificativa
+#### Justificativa
 
 As fontes são reutilizadas por todos os documentos do banco.
 
@@ -691,11 +691,11 @@ Essa abordagem reduz redundância e permite responder consultas de proveniência
 
 ---
 
-# 6.6 Índices Planejados
+## 6.f Índices Planejados
 
 Para atender aos requisitos de desempenho da Seção 7, serão criados índices sobre os campos mais consultados.
 
-## Índice por Município
+### Índice por Município
 
 ```javascript
 db.municipios.createIndex(
@@ -705,7 +705,7 @@ db.municipios.createIndex(
 
 ---
 
-## Índice por Região
+### Índice por Região
 
 ```javascript
 db.municipios.createIndex(
@@ -715,7 +715,7 @@ db.municipios.createIndex(
 
 ---
 
-## Índice por Ano da Série
+### Índice por Ano da Série
 
 ```javascript
 db.municipios.createIndex(
@@ -725,7 +725,7 @@ db.municipios.createIndex(
 
 ---
 
-## Índice Composto (ESR)
+### Índice Composto (ESR)
 
 ```javascript
 db.municipios.createIndex(
@@ -740,7 +740,7 @@ Este índice atende diretamente às consultas de ranking (Q1).
 
 ---
 
-# 6.7 Alinhamento com os Requisitos de Consulta
+## 6.g Alinhamento com os Requisitos de Consulta
 
 | Pergunta | Estrutura Utilizada                          |
 | -------- | -------------------------------------------- |
@@ -754,9 +754,9 @@ Este índice atende diretamente às consultas de ranking (Q1).
 
 ---
 
-# 6.8 Padrões de Modelagem Aplicados
+## 6.h Padrões de Modelagem Aplicados
 
-## Embedded Document Pattern
+### Embedded Document Pattern
 
 Aplicado em:
 
@@ -765,7 +765,7 @@ Aplicado em:
 
 ---
 
-## Computed Pattern
+### Computed Pattern
 
 Aplicado em:
 
@@ -777,7 +777,7 @@ Esses valores são calculados durante a camada Silver do ETL.
 
 ---
 
-## Extended Reference Pattern
+### Extended Reference Pattern
 
 Aplicado em:
 
@@ -788,13 +788,13 @@ Aplicado em:
 
 ---
 
-## Subset Pattern
+### Subset Pattern
 
 Apenas os atributos geográficos necessários para consulta são copiados para o documento principal.
 
 ---
 
-# 6.9 Coleções Finais do Projeto
+## 6.i Coleções Finais do Projeto
 
 Ao final da execução do pipeline ETL o banco MongoDB será composto pelas seguintes coleções:
 
