@@ -810,3 +810,151 @@ As coleções `ufs` e `regioes` serão mantidas como catálogos geográficos de 
 Dessa forma, a Q3 agrupa diretamente por `siglaRegiao` ou `nomeRegiao` a partir da coleção `municipios`, evitando join no caminho quente do dashboard.
 
 O uso obrigatório de `$lookup` no projeto será atendido pela Q7, que relaciona `seriesAnuais.fonteIds` com a coleção `fontes` para exibir a proveniência dos dados utilizados.
+
+# 7. Pipeline ETL e Carga no MongoDB
+
+Projeto completo para o checkpoint C3 do MPTIBD: **Atlas da Violência × Indicadores Socioeconômicos por Município**.
+
+## 7.a O que este projeto entrega
+
+- Extração dos CSVs brutos do Atlas da Violência e do SIDRA 5919.
+- Coleta opcional da API Localidades do IBGE.
+- Camada Bronze, Silver e Gold.
+- Parser específico do SIDRA 5919, que converte o arquivo wide/multi-cabeçalho para dados anuais normalizados.
+- Construção dos documentos da coleção `municipios` com `seriesAnuais` embutida.
+- Carga no MongoDB.
+- Coleções `municipios`, `ufs`, `regioes` e `fontes`.
+- Índices simples e compostos.
+- Consultas Q1–Q7.
+- Demonstração de `explain`.
+
+## 7.b Estrutura
+
+```text
+mptibd_section7/
+├── data/
+│   ├── bronze/
+│   ├── silver/
+│   └── gold/
+├── scripts/
+│   └── mongosh_queries.js
+├── src/
+│   ├── config.py
+│   ├── extract.py
+│   ├── transform.py
+│   ├── load.py
+│   ├── queries.py
+│   ├── explain.py
+│   └── main.py
+├── docker-compose.yml
+├── requirements.txt
+└── README.md
+```
+
+## 7.c Como executar
+
+### 1. Subir o MongoDB
+
+```bash
+docker compose up -d
+```
+
+### 2. Criar ambiente Python
+
+```bash
+python -m venv .venv
+source .venv/bin/activate       # Linux/macOS
+# .venv\Scripts\activate        # Windows
+
+pip install -r requirements.txt
+```
+
+### 3. Configurar variáveis
+
+```bash
+cp .env.example .env
+```
+
+Conteúdo padrão:
+
+```env
+MONGO_URI=mongodb://localhost:27017
+MONGO_DB=atlas_violencia
+```
+
+### 4. Executar pipeline completo
+
+Como os CSVs já estão dentro de `data/bronze`, rode:
+
+```bash
+python src/main.py --drop-db
+```
+
+Caso queira informar caminhos externos:
+
+```bash
+python src/main.py \
+  --homens "caminho/Homicídios Homens_municípios.csv" \
+  --mulheres "caminho/Homicídios Mulheres_municípios.csv" \
+  --sidra "caminho/tabela5919-populacao-por-nivel-instrucao.csv" \
+  --drop-db
+```
+
+Se estiver sem internet e quiser pular a API Localidades:
+
+```bash
+python src/main.py --skip-api --drop-db
+```
+
+Nesse modo, os documentos são gerados com nome do município vindo do SIDRA, mas sem UF/região completas.
+
+## 7.d Executar consultas Q1–Q7
+
+```bash
+python src/queries.py
+```
+
+Ou pelo mongosh:
+
+```bash
+mongosh < scripts/mongosh_queries.js
+```
+
+## 7.e Executar explain
+
+```bash
+python src/explain.py
+```
+
+## 7.f Consultas implementadas
+
+| Código | Pergunta | Recurso MongoDB |
+|---|---|---|
+| Q1 | Top 10 municípios com maior taxa de homicídios | `$unwind`, `$match`, `$sort`, `$limit` |
+| Q2 | Evolução histórica de um município | `$filter` em array embutido |
+| Q3 | Média por região | `$group` |
+| Q4 | Violência × escolaridade | `$project` |
+| Q5 | Municípios com taxa alta e escolaridade baixa | `$elemMatch` |
+| Q6 | Média por porte populacional | `$bucket` |
+| Q7 | Proveniência dos indicadores | `$lookup` |
+
+## 7.g Índices criados
+
+```javascript
+db.municipios.createIndex({ codIBGE: 1 }, { unique: true })
+db.municipios.createIndex({ nomeRegiao: 1 })
+db.municipios.createIndex({ "seriesAnuais.ano": 1 })
+db.municipios.createIndex({ "seriesAnuais.ano": 1, "seriesAnuais.taxaHomicidiosPor100k": -1 })
+```
+
+O índice composto atende à regra ESR:
+
+- Equality: `seriesAnuais.ano`
+- Sort: `seriesAnuais.taxaHomicidiosPor100k`
+
+## 7.h Padrões de Schema aplicados
+
+- **Computed Pattern:** `homicidiosTotais`, `taxaHomicidiosPor100k`, `pctEnsinoMedioOuMais`.
+- **Extended Reference Pattern:** `siglaUF`, `nomeUF`, `siglaRegiao`, `nomeRegiao` dentro de `municipios`.
+- **Subset Pattern:** apenas os campos geográficos úteis ao dashboard são copiados para a coleção principal.
+- **Schema Versioning:** campo `schemaVersion: 1` nos documentos de município.
