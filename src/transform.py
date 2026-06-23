@@ -164,7 +164,14 @@ def transform_sidra() -> pd.DataFrame:
     return pivot
 
 def flatten_municipio(item: dict[str, Any]) -> dict[str, Any]:
-    uf = item.get("microrregiao", {}).get("mesorregiao", {}).get("UF", {})
+    # A maioria dos municípios traz a hierarquia em microrregião → mesorregião → UF.
+    # Municípios mais recentes (ex.: Boa Esperança do Norte/MT) vêm com microrregião
+    # nula e a UF acessível pela trilha regiao-imediata → regiao-intermediaria.
+    micro = item.get("microrregiao") or {}
+    uf = micro.get("mesorregiao", {}).get("UF")
+    if not uf:
+        imediata = item.get("regiao-imediata") or {}
+        uf = imediata.get("regiao-intermediaria", {}).get("UF", {})
     regiao = uf.get("regiao", {})
     return {
         "codIBGE": str(item.get("id")).zfill(7),
@@ -272,7 +279,17 @@ def build_municipio_documents(
     for cod, group in merged.groupby("codIBGE"):
         group = group.sort_values("ano")
         first = group.iloc[0]
-        nome = first.get("nome") or first.get("nomeSidra") or f"Município {cod}"
+        # NaN é "truthy" em Python, então um simples `or` não cai no fallback quando
+        # o município existe no Atlas mas não nas Localidades/SIDRA. Coalesce explícito.
+        def _coalesce_nome(*candidatos: Any) -> str:
+            for cand in candidatos:
+                if cand is not None and not (isinstance(cand, float) and pd.isna(cand)):
+                    texto = str(cand).strip()
+                    if texto:
+                        return texto
+            return f"Município {cod}"
+
+        nome = _coalesce_nome(first.get("nome"), first.get("nomeSidra"))
 
         series = []
         for _, row in group.iterrows():

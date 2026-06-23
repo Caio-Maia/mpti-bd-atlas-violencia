@@ -958,3 +958,46 @@ O índice composto atende à regra ESR:
 - **Extended Reference Pattern:** `siglaUF`, `nomeUF`, `siglaRegiao`, `nomeRegiao` dentro de `municipios`.
 - **Subset Pattern:** apenas os campos geográficos úteis ao dashboard são copiados para a coleção principal.
 - **Schema Versioning:** campo `schemaVersion: 1` nos documentos de município.
+
+## 8. Aplicação de visualização (consumo dos dados)
+
+**Observatório da Violência** — painel web que consome as consultas Q1–Q7 **ao vivo no MongoDB**
+(nenhum dado é pré-computado à mão). Um servidor Flask leve (`src/app.py`) executa os pipelines
+de `src/queries.py` e serve a interface estática em `web/`. Cada cartão exibe o botão
+*"ver consulta executada"*, que revela o pipeline real enviado ao banco — evidência direta do
+uso efetivo do MongoDB.
+
+### 8.a Como executar
+
+Com o MongoDB no ar e a base já carregada (Seção 7.c):
+
+```bash
+python src/app.py
+# abre em http://127.0.0.1:5000
+```
+
+### 8.b Cada pergunta da Seção 4 vira um elemento da interface
+
+| Q | Elemento visual | Interatividade |
+|---|---|---|
+| Q3 | **Mapa coroplético** do Brasil por macrorregião + capitais (raio = nº de homicídios, cor = taxa) | seletor de **ano** |
+| Q1 | **Ranking** das 10 capitais mais violentas (barras na escala de intensidade) | seletor de **ano** |
+| Q4 | **Dispersão** escolaridade × taxa de homicídios (uma capital por ponto) | seletor de **ano** |
+| Q2 | **Linha + barras** da evolução histórica de um município (contagem e taxa) | seletor de **município** |
+| Q6 | **Barras** da taxa média por porte populacional (`$bucket`) | seletor de **ano** |
+| Q5 | **Lista filtrável** por dois limiares (`$elemMatch`) | **sliders** de taxa mínima e escolaridade máxima |
+| Q7 | **Tabela de proveniência** das fontes de cada indicador (`$lookup`) | seletor de **município/ano** |
+
+### 8.c Recorte do dado na interface
+
+As **contagens** de homicídios cobrem os 5.579 municípios (Atlas/Ipea, 1989–2023), mas a **taxa por
+100 mil** e a **escolaridade** dependem da população amostrada pela PNAD Contínua (SIDRA/IBGE),
+disponível apenas para as **27 capitais** (2012–2022, exceto 2021). Por isso ranking, mapa e
+dispersão operam sobre esse conjunto — o painel declara esse recorte no rodapé, e o seletor de ano
+expõe apenas os anos com taxa calculada.
+
+### 8.d Stack
+
+- **Back-end:** Flask servindo `/api/q1…q7` (cada endpoint devolve resultado **e** consulta) + `/api/meta`.
+- **Front-end:** HTML/CSS/JS sem build; mapa e gráficos em SVG com [D3](web/vendor/) (versionado localmente, roda offline).
+- **Malha geográfica:** IBGE Malhas (macrorregiões) em `web/assets/`.

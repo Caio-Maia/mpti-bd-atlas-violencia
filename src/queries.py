@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pprint import pprint
-from pymongo import MongoClient, DESCENDING
+from pymongo import MongoClient
 from config import MONGO_URI, MONGO_DB
 
 
@@ -9,12 +9,21 @@ def get_db():
     return MongoClient(MONGO_URI)[MONGO_DB]
 
 
-def q1_top10_municipios_ano(ano: int = 2022):
-    return list(get_db().municipios.aggregate([
+# ---------------------------------------------------------------------------
+# Cada consulta é dividida em duas partes:
+#   *_pipeline / *_query  -> devolve a consulta (pipeline ou filtro) como dado
+#   q*_...                -> executa a consulta no MongoDB e devolve a lista
+# Separar as duas permite que a aplicação de visualização (src/app.py) exiba a
+# consulta real que está sendo executada, evidenciando o uso efetivo do MongoDB.
+# ---------------------------------------------------------------------------
+
+
+def q1_pipeline(ano: int = 2022, limite: int = 10):
+    return [
         {"$unwind": "$seriesAnuais"},
         {"$match": {"seriesAnuais.ano": ano, "seriesAnuais.taxaHomicidiosPor100k": {"$ne": None}}},
         {"$sort": {"seriesAnuais.taxaHomicidiosPor100k": -1}},
-        {"$limit": 10},
+        {"$limit": limite},
         {"$project": {
             "_id": 0,
             "codIBGE": 1,
@@ -25,11 +34,15 @@ def q1_top10_municipios_ano(ano: int = 2022):
             "taxaHomicidiosPor100k": "$seriesAnuais.taxaHomicidiosPor100k",
             "homicidiosTotais": "$seriesAnuais.homicidiosTotais",
         }},
-    ]))
+    ]
 
 
-def q2_evolucao_municipio(cod_ibge: int = 2507507, ano_inicio: int = 2012, ano_fim: int = 2022):
-    return list(get_db().municipios.aggregate([
+def q1_top10_municipios_ano(ano: int = 2022, limite: int = 10):
+    return list(get_db().municipios.aggregate(q1_pipeline(ano, limite)))
+
+
+def q2_pipeline(cod_ibge: int = 2507507, ano_inicio: int = 2012, ano_fim: int = 2022):
+    return [
         {"$match": {"codIBGE": cod_ibge}},
         {"$project": {
             "_id": 0,
@@ -46,25 +59,39 @@ def q2_evolucao_municipio(cod_ibge: int = 2507507, ano_inicio: int = 2012, ano_f
                 }
             },
         }},
-    ]))
+    ]
 
 
-def q3_media_regiao_ano(ano: int = 2022):
-    return list(get_db().municipios.aggregate([
+def q2_evolucao_municipio(cod_ibge: int = 2507507, ano_inicio: int = 2012, ano_fim: int = 2022):
+    return list(get_db().municipios.aggregate(q2_pipeline(cod_ibge, ano_inicio, ano_fim)))
+
+
+def q3_pipeline(ano: int = 2022):
+    return [
         {"$unwind": "$seriesAnuais"},
         {"$match": {"seriesAnuais.ano": ano, "seriesAnuais.taxaHomicidiosPor100k": {"$ne": None}}},
         {"$group": {
-            "_id": "$nomeRegiao",
+            "_id": {"codRegiao": "$codRegiao", "regiao": "$nomeRegiao"},
             "mediaTaxa": {"$avg": "$seriesAnuais.taxaHomicidiosPor100k"},
             "municipios": {"$sum": 1},
         }},
         {"$sort": {"mediaTaxa": -1}},
-        {"$project": {"_id": 0, "regiao": "$_id", "mediaTaxa": {"$round": ["$mediaTaxa", 2]}, "municipios": 1}},
-    ]))
+        {"$project": {
+            "_id": 0,
+            "codRegiao": "$_id.codRegiao",
+            "regiao": "$_id.regiao",
+            "mediaTaxa": {"$round": ["$mediaTaxa", 2]},
+            "municipios": 1,
+        }},
+    ]
 
 
-def q4_scatter_violencia_escolaridade(ano: int = 2022, limite: int = 200):
-    return list(get_db().municipios.aggregate([
+def q3_media_regiao_ano(ano: int = 2022):
+    return list(get_db().municipios.aggregate(q3_pipeline(ano)))
+
+
+def q4_pipeline(ano: int = 2022, limite: int = 200):
+    return [
         {"$unwind": "$seriesAnuais"},
         {"$match": {
             "seriesAnuais.ano": ano,
@@ -75,27 +102,36 @@ def q4_scatter_violencia_escolaridade(ano: int = 2022, limite: int = 200):
             "_id": 0,
             "municipio": "$nome",
             "uf": "$siglaUF",
+            "regiao": "$nomeRegiao",
             "taxaHomicidiosPor100k": "$seriesAnuais.taxaHomicidiosPor100k",
             "pctEnsinoMedioOuMais": "$seriesAnuais.pctEnsinoMedioOuMais",
             "populacaoTotal": "$seriesAnuais.populacaoTotal",
         }},
         {"$sort": {"taxaHomicidiosPor100k": -1}},
         {"$limit": limite},
-    ]))
+    ]
+
+
+def q4_scatter_violencia_escolaridade(ano: int = 2022, limite: int = 200):
+    return list(get_db().municipios.aggregate(q4_pipeline(ano, limite)))
+
+
+def q5_query(taxa_min: float = 50, escolaridade_max: float = 30):
+    filtro = {"seriesAnuais": {"$elemMatch": {
+        "taxaHomicidiosPor100k": {"$gt": taxa_min},
+        "pctEnsinoMedioOuMais": {"$lt": escolaridade_max},
+    }}}
+    projecao = {"_id": 0, "codIBGE": 1, "nome": 1, "siglaUF": 1, "nomeRegiao": 1, "seriesAnuais.$": 1}
+    return filtro, projecao
 
 
 def q5_elem_match(taxa_min: float = 50, escolaridade_max: float = 30):
-    return list(get_db().municipios.find(
-        {"seriesAnuais": {"$elemMatch": {
-            "taxaHomicidiosPor100k": {"$gt": taxa_min},
-            "pctEnsinoMedioOuMais": {"$lt": escolaridade_max},
-        }}},
-        {"_id": 0, "codIBGE": 1, "nome": 1, "siglaUF": 1, "seriesAnuais.$": 1},
-    ).limit(50))
+    filtro, projecao = q5_query(taxa_min, escolaridade_max)
+    return list(get_db().municipios.find(filtro, projecao).limit(50))
 
 
-def q6_bucket_porte_populacional(ano: int = 2022):
-    return list(get_db().municipios.aggregate([
+def q6_pipeline(ano: int = 2022):
+    return [
         {"$unwind": "$seriesAnuais"},
         {"$match": {"seriesAnuais.ano": ano, "seriesAnuais.populacaoTotal": {"$ne": None}}},
         {"$bucket": {
@@ -109,6 +145,7 @@ def q6_bucket_porte_populacional(ano: int = 2022):
         }},
         {"$project": {
             "_id": 0,
+            "faixa": "$_id",
             "portePopulacional": {"$switch": {
                 "branches": [
                     {"case": {"$eq": ["$_id", 0]}, "then": "Pequeno - até 20 mil hab."},
@@ -120,11 +157,15 @@ def q6_bucket_porte_populacional(ano: int = 2022):
             "municipios": 1,
             "mediaTaxa": {"$round": ["$mediaTaxa", 2]},
         }},
-    ]))
+    ]
 
 
-def q7_lookup_fontes(cod_ibge: int = 2507507, ano: int = 2022):
-    return list(get_db().municipios.aggregate([
+def q6_bucket_porte_populacional(ano: int = 2022):
+    return list(get_db().municipios.aggregate(q6_pipeline(ano)))
+
+
+def q7_pipeline(cod_ibge: int = 2507507, ano: int = 2022):
+    return [
         {"$match": {"codIBGE": cod_ibge}},
         {"$unwind": "$seriesAnuais"},
         {"$match": {"seriesAnuais.ano": ano}},
@@ -147,7 +188,11 @@ def q7_lookup_fontes(cod_ibge: int = 2507507, ano: int = 2022):
             "fontes.origem": 1,
             "fontes.portal": 1,
         }},
-    ]))
+    ]
+
+
+def q7_lookup_fontes(cod_ibge: int = 2507507, ano: int = 2022):
+    return list(get_db().municipios.aggregate(q7_pipeline(cod_ibge, ano)))
 
 
 def run_all_examples() -> None:
