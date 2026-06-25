@@ -967,14 +967,69 @@ de `src/queries.py` e serve a interface estática em `web/`. Cada cartão exibe 
 *"ver consulta executada"*, que revela o pipeline real enviado ao banco — evidência direta do
 uso efetivo do MongoDB.
 
-### 8.a Como executar
+### 8.a Como subir tudo (back-end + front-end)
 
-Com o MongoDB no ar e a base já carregada (Seção 7.c):
+O front-end **não é um arquivo estático** que se abre direto: ele consome a API Flask
+(`/api/meta`, `/api/q1…q7`), que por sua vez lê o MongoDB. Abrir `web/index.html` pelo
+`file://` resulta em *"falha ao conectar"*. Por isso a ordem é sempre:
+**Mongo → carga da base → Flask → navegador**.
+
+#### Passo a passo (a partir da raiz do repositório)
 
 ```bash
-python src/app.py
-# abre em http://127.0.0.1:5000
+# 1. Banco no ar (porta 27017)
+docker compose up -d
+
+# 2. Ambiente Python (caso ainda não exista)
+python -m venv .venv
+source .venv/bin/activate        # Linux/WSL/macOS
+# .venv\Scripts\activate         # Windows
+
+pip install -r requirements.txt
+
+# 3. Configuração (defaults servem para o docker local)
+cp .env.example .env
+
+# 4. Carregar a base — só na primeira vez ou quando quiser recriar
+python src/main.py --drop-db
+
+# 5. Subir o servidor (back-end + front-end no mesmo processo)
+python src/app.py                # serve em http://127.0.0.1:5000
 ```
+
+O `src/app.py` serve **a API e a interface estática** de `web/` no mesmo endereço; basta
+abrir `http://127.0.0.1:5000`. Esse comando fica em **primeiro plano** (é o servidor
+rodando) — use outro terminal para os demais comandos, ou deixe-o em background (abaixo).
+
+#### Abrindo o navegador no WSL
+
+No WSL o `localhost` é compartilhado com o Windows, então o painel abre no navegador do
+Windows normalmente. Para abri-lo pela linha de comando:
+
+```bash
+explorer.exe "http://127.0.0.1:5000"      # navegador padrão do Windows
+# ou, se tiver o pacote wslu instalado:
+wslview "http://127.0.0.1:5000"
+```
+
+Se preferir não prender um terminal ao servidor, suba o Flask em background (o `nohup`
+desprende o processo, então ele sobrevive ao fechamento do terminal):
+
+```bash
+nohup python src/app.py > /tmp/flask.log 2>&1 &
+explorer.exe "http://127.0.0.1:5000"
+```
+
+Para derrubar depois: `pkill -f "src/app.py"`.
+
+#### Diagnóstico rápido
+
+- Painel mostra *"falha ao conectar — o MongoDB está no ar?"* → o Mongo caiu ou a base
+  não foi carregada. Verifique com `docker compose ps` e rode a carga (passo 4).
+- `http://127.0.0.1:5000` não responde → o Flask não está rodando; confira o terminal do
+  passo 5 (ou `cat /tmp/flask.log` se subiu em background).
+- O servidor roda em `debug=True`: alterações em `web/` aparecem com um *refresh*;
+  alterações em `src/` reiniciam o servidor sozinhas.
 
 ### 8.b Cada pergunta da Seção 4 vira um elemento da interface
 
@@ -1001,3 +1056,51 @@ expõe apenas os anos com taxa calculada.
 - **Back-end:** Flask servindo `/api/q1…q7` (cada endpoint devolve resultado **e** consulta) + `/api/meta`.
 - **Front-end:** HTML/CSS/JS sem build; mapa e gráficos em SVG com [D3](web/vendor/) (versionado localmente, roda offline).
 - **Malha geográfica:** IBGE Malhas (macrorregiões) em `web/assets/`.
+
+---
+
+## 9. Stack tecnológica
+
+Visão consolidada das tecnologias do projeto, do banco ao navegador.
+
+### 9.a Back-end
+
+| Camada | Tecnologia | Versão | Papel |
+|---|---|---|---|
+| Linguagem | **Python** | 3.x | Pipeline ETL e API |
+| API web | **Flask** | 3.0.3 | Servidor que expõe `/api/meta` e `/api/q1…q7` ao vivo e serve o front estático (`src/app.py`) |
+| Banco de dados | **MongoDB** | 7 | Banco orientado a documentos (coleções `municipios`, `ufs`, `regioes`, `fontes`) |
+| Driver | **PyMongo** | 4.10.1 | Acesso ao MongoDB (consultas, agregações, índices) |
+| Transformação | **pandas** | 2.2.3 | Limpeza, unpivot do SIDRA e construção das camadas Silver/Gold |
+| HTTP | **requests** | 2.32.3 | Coleta da API IBGE Localidades |
+| Configuração | **python-dotenv** | 1.0.1 | Carga de variáveis de ambiente do `.env` |
+
+### 9.b Front-end
+
+| Item | Tecnologia | Papel |
+|---|---|---|
+| Marcação/estilo | **HTML5 + CSS** puro (`web/index.html`, `web/styles.css`) | Interface sem framework, sem etapa de build |
+| Lógica | **JavaScript (vanilla)** (`web/app.js`) | Consome a API Flask via `fetch` e monta os cartões Q1–Q7 |
+| Visualização | **D3.js v7** (`web/vendor/d3.v7.min.js`) | Mapa coroplético, dispersão e séries temporais em SVG; vendorizado para rodar offline |
+| Tipografia | **IBM Plex** (Google Fonts) | Família tipográfica do painel |
+| Malha geográfica | **IBGE Malhas** (`web/assets/`) | GeoJSON das macrorregiões e capitais |
+
+### 9.c Infraestrutura e dados
+
+| Item | Tecnologia | Papel |
+|---|---|---|
+| Orquestração local | **Docker / Docker Compose** | Sobe o MongoDB 7 (`docker-compose.yml`, container `mptibd_mongodb`) |
+| Arquitetura ETL | **Medallion** (Bronze → Silver → Gold) | `data/{bronze,silver,gold}`, orquestrado por `src/main.py` |
+| Fontes de dados | Atlas da Violência (Ipea/FBSP), IBGE SIDRA Tab. 5919, IBGE API Localidades | Ver Seção 3 |
+
+### 9.d Subir tudo de uma vez
+
+Há um script `run.sh` na raiz que automatiza todo o fluxo (pré-requisitos → `.env` → MongoDB → virtualenv + dependências → ETL → aplicação):
+
+```bash
+bash run.sh            # setup completo + ETL + sobe a aplicação em http://127.0.0.1:5000
+bash run.sh --no-app   # só prepara o ambiente e roda o ETL
+bash run.sh --reset    # recria o banco do zero (--drop-db no ETL)
+```
+
+O passo a passo manual equivalente está na Seção 8.a.
