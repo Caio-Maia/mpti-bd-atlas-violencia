@@ -15,13 +15,33 @@ const rateColor = d3.scaleLinear()
 
 const REGIAO_NOME = { 1: "Norte", 2: "Nordeste", 3: "Sudeste", 4: "Sul", 5: "Centro-Oeste" };
 
+// Rótulos PT-BR dos níveis de instrução (ordem de exibição no tooltip/comparação).
+const NIVEL_LABELS = {
+  semInstrucao: "Sem instrução",
+  fundamentalIncompleto: "Fundamental incompleto",
+  fundamentalCompleto: "Fundamental completo",
+  medioIncompleto: "Médio incompleto",
+  medioCompleto: "Médio completo",
+  superiorIncompleto: "Superior incompleto",
+  superiorCompleto: "Superior completo",
+  naoDeterminado: "Não informado",
+};
+const NIVEL_ORDER = Object.keys(NIVEL_LABELS);
+
 const state = {
   meta: null,
   anos: [],          // anos com taxa disponível
   ano: 2022,
-  geo: null,
+  geo: null,         // malha de regiões
+  geoEstados: null,  // malha de estados (UF)
   capitais: {},      // codIBGE -> [lon, lat]
   munSel: 2507507,   // João Pessoa
+  // Território do ano corrente (alimenta os dois mapas, tooltips e comparação).
+  territorio: { regioes: [], estados: [], capitais: [] },
+  byRegiao: new Map(),   // codRegiao -> bundle
+  byUF: new Map(),       // codUF -> bundle
+  byCapital: new Map(),  // codIBGE -> bundle
+  byCapitalUF: new Map(),// siglaUF -> bundle (capital)
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -49,19 +69,57 @@ function showTip(html, evt) {
 }
 function hideTip() { tip.hidden = true; }
 
+/* ---------------- Tooltip padronizado (Valores + Escolaridade) ----------------
+   Um único modelo para TODOS os gráficos. `b` é um "bundle" com os campos:
+   nome, siglaUF?, populacaoTotal (em milhares), homicidiosTotais,
+   taxaHomicidiosPor100k, niveisInstrucao{...} (em milhares). Campos ausentes
+   viram "—" ou são omitidos. */
+function tipTitle(b) {
+  return b.siglaUF ? `${b.nome} — ${b.siglaUF}` : (b.nome || "—");
+}
+
+function escolaridadeRows(b) {
+  const niveis = b.niveisInstrucao;
+  const total = b.populacaoTotal;
+  if (!niveis || !total) return "";
+  const rows = NIVEL_ORDER
+    .filter((k) => niveis[k] != null)
+    .map((k) => `<div class="tt__row">${NIVEL_LABELS[k]} <b>${fmt((niveis[k] / total) * 100, 0)}%</b></div>`)
+    .join("");
+  return rows ? `<div class="tt__sec">Escolaridade</div>${rows}` : "";
+}
+
+function valoresRows(b) {
+  // População SIDRA vem em milhares de pessoas → converte para habitantes.
+  const pop = b.populacaoTotal != null ? fmtInt(Math.round(b.populacaoTotal * 1000)) : "—";
+  const total = b.homicidiosTotais != null ? fmtInt(b.homicidiosTotais) : "—";
+  const taxa = b.taxaHomicidiosPor100k != null ? fmt(b.taxaHomicidiosPor100k) : "—";
+  return `<div class="tt__sec">Valores</div>` +
+    `<div class="tt__row">População (hab) <b>${pop}</b></div>` +
+    `<div class="tt__row">Valor total <b>${total}</b></div>` +
+    `<div class="tt__row">Taxa (100 mil hab) <b>${taxa}</b></div>`;
+}
+
+function tipHTML(b) {
+  if (!b) return `<div class="tt__name">sem dados</div>`;
+  return `<div class="tt__name">${tipTitle(b)}</div>${valoresRows(b)}${escolaridadeRows(b)}`;
+}
+
 /* ============================================================
    BOOT
    ============================================================ */
 async function boot() {
   try {
-    const [meta, geo, caps] = await Promise.all([
+    const [meta, geo, geoEstados, caps] = await Promise.all([
       api("/api/meta"),
       fetch("assets/br-regioes.geojson").then((r) => r.json()),
+      fetch("assets/br-estados.geojson").then((r) => r.json()),
       fetch("assets/capitais.json").then((r) => r.json()),
     ]);
     state.meta = meta;
     state.anos = meta.anosTaxa;
     state.geo = geo;
+    state.geoEstados = geoEstados;
     state.capitais = caps;
 
     setStatus(true, `${meta.db} · ${fmtInt(meta.totalMunicipios)} municípios · ${meta.fontes.length} fontes`);
@@ -70,6 +128,8 @@ async function boot() {
     setupMunSelect();
     setupThresholds();
     setupPeeks();
+    setupCompare();
+    setupUpdate();
 
     await refreshByYear();
     await Promise.all([loadEvolucao(), loadFontes(), loadFiltro()]);
@@ -139,25 +199,39 @@ function setupThresholds() {
 async function refreshByYear() {
   const ano = state.ano;
   $("#pulseAno").textContent = ano;
-  const [q1, q3, q4, q6] = await Promise.all([
+  const [q1, q3, q4, q6, terr] = await Promise.all([
     api(`/api/q1?ano=${ano}&limite=27`),
     api(`/api/q3?ano=${ano}`),
     api(`/api/q4?ano=${ano}`),
     api(`/api/q6?ano=${ano}`),
+    api(`/api/territorio?ano=${ano}`),
   ]);
   setPeek("q1", q1);
   setPeek("q3", q3);
   setPeek("q4", q4);
   setPeek("q6", q6);
 
+  indexTerritorio(terr);
+
   renderPulse(q1.resultado);
-  renderMap(q3.resultado, q1.resultado);
+  renderMapRegioes();
+  renderMapEstados();
   renderHeroStats(q1.resultado, q3.resultado);
   renderRanking(q1.resultado.slice(0, 10));
   renderScatter(q4.resultado);
   renderBucket(q6.resultado);
+  renderCompare();
   // a série Q7 acompanha o ano global
   loadFontes();
+}
+
+/* ---------------- Índices do território (lookup O(1) para tooltips) ---------------- */
+function indexTerritorio(terr) {
+  state.territorio = terr;
+  state.byRegiao = new Map(terr.regioes.map((r) => [String(r.codRegiao), r]));
+  state.byUF = new Map(terr.estados.map((e) => [String(e.codUF), e]));
+  state.byCapital = new Map(terr.capitais.map((c) => [String(c.codIBGE), c]));
+  state.byCapitalUF = new Map(terr.capitais.map((c) => [c.siglaUF, c]));
 }
 
 /* ---------------- Pulso nacional ---------------- */
@@ -168,20 +242,17 @@ function renderPulse(rows) {
     .map((d) => {
       const h = Math.max(6, (d.taxaHomicidiosPor100k / max) * 100);
       return `<span class="pulse__bar" style="height:${h}%;background:${rateColor(d.taxaHomicidiosPor100k)};opacity:.86"
-        data-tip="${d.municipio}/${d.uf}|${fmt(d.taxaHomicidiosPor100k)}"></span>`;
+        data-cod="${d.codIBGE}"></span>`;
     }).join("");
   $("#pulseBars").querySelectorAll(".pulse__bar").forEach((b) => {
-    b.addEventListener("mousemove", (e) => {
-      const [nome, taxa] = b.dataset.tip.split("|");
-      showTip(`<div class="tt__name">${nome}</div><div class="tt__row">taxa <b>${taxa}</b> / 100 mil</div>`, e);
-    });
+    b.addEventListener("mousemove", (e) => showTip(tipHTML(state.byCapital.get(b.dataset.cod)), e));
     b.addEventListener("mouseleave", hideTip);
   });
 }
 
-/* ---------------- Q3 · Mapa coroplético + capitais ---------------- */
-function renderMap(q3rows, q1rows) {
-  const svg = d3.select("#map");
+/* ---------------- Q3 · Mapa 1 — só macrorregiões ---------------- */
+function renderMapRegioes() {
+  const svg = d3.select("#mapRegioes");
   svg.selectAll("*").remove();
   const W = 520, H = 540;
   // geoIdentity (projeção planar) evita o bug de winding do d3-geo esférico, que
@@ -189,33 +260,54 @@ function renderMap(q3rows, q1rows) {
   const proj = d3.geoIdentity().reflectY(true).fitSize([W, H - 10], state.geo);
   const path = d3.geoPath(proj);
 
-  const byReg = new Map(q3rows.map((r) => [String(r.codRegiao), r]));
-
   svg.append("g").selectAll("path")
     .data(state.geo.features)
     .join("path")
     .attr("class", "map__region")
     .attr("d", path)
     .attr("fill", (f) => {
-      const r = byReg.get(String(f.properties.codarea));
-      return r ? rateColor(r.mediaTaxa) : "#23202B";
+      const r = state.byRegiao.get(String(f.properties.codarea));
+      return r ? rateColor(r.taxaHomicidiosPor100k) : "#23202B";
     })
     .on("mousemove", (e, f) => {
-      const r = byReg.get(String(f.properties.codarea));
-      const nome = REGIAO_NOME[f.properties.codarea] || "Região";
-      showTip(
-        `<div class="tt__name">${nome}</div>` +
-        (r ? `<div class="tt__row">taxa média <b>${fmt(r.mediaTaxa)}</b></div><div class="tt__row">capitais: <b>${r.municipios}</b></div>` : `<div class="tt__row">sem dados</div>`),
-        e);
+      const r = state.byRegiao.get(String(f.properties.codarea));
+      const bundle = r || { nome: REGIAO_NOME[f.properties.codarea] || "Região" };
+      showTip(tipHTML(bundle), e);
+    })
+    .on("mouseleave", hideTip);
+}
+
+/* ---------------- Q3 · Mapa 2 — estados (coroplético) + capitais ---------------- */
+function renderMapEstados() {
+  const svg = d3.select("#mapEstados");
+  svg.selectAll("*").remove();
+  const W = 520, H = 540;
+  const proj = d3.geoIdentity().reflectY(true).fitSize([W, H - 10], state.geoEstados);
+  const path = d3.geoPath(proj);
+
+  // polígonos das UFs: cor = taxa da capital (= taxa agregada da UF)
+  svg.append("g").selectAll("path")
+    .data(state.geoEstados.features)
+    .join("path")
+    .attr("class", "map__region")
+    .attr("d", path)
+    .attr("fill", (f) => {
+      const e = state.byUF.get(String(+f.properties.codarea));
+      return e ? rateColor(e.taxaHomicidiosPor100k) : "#23202B";
+    })
+    .on("mousemove", (e, f) => {
+      const uf = state.byUF.get(String(+f.properties.codarea));
+      showTip(tipHTML(uf || { nome: "Estado " + f.properties.codarea }), e);
     })
     .on("mouseleave", hideTip);
 
   // capitais: raio = nº de homicídios, cor = taxa
-  const rmax = d3.max(q1rows, (d) => d.homicidiosTotais) || 1;
+  const caps = state.territorio.capitais.filter((d) => state.capitais[d.codIBGE]);
+  const rmax = d3.max(caps, (d) => d.homicidiosTotais) || 1;
   const rscale = d3.scaleSqrt().domain([0, rmax]).range([2.5, 16]);
 
   svg.append("g").selectAll("circle")
-    .data(q1rows.filter((d) => state.capitais[d.codIBGE]))
+    .data(caps)
     .join("circle")
     .attr("class", "map__dot")
     .attr("cx", (d) => proj(state.capitais[d.codIBGE])[0])
@@ -223,10 +315,7 @@ function renderMap(q3rows, q1rows) {
     .attr("r", (d) => rscale(d.homicidiosTotais))
     .attr("fill", (d) => rateColor(d.taxaHomicidiosPor100k))
     .attr("fill-opacity", 0.92)
-    .on("mousemove", (e, d) => showTip(
-      `<div class="tt__name">${d.municipio} — ${d.uf}</div>` +
-      `<div class="tt__row">taxa <b>${fmt(d.taxaHomicidiosPor100k)}</b> / 100 mil</div>` +
-      `<div class="tt__row">homicídios <b>${fmtInt(d.homicidiosTotais)}</b></div>`, e))
+    .on("mousemove", (e, d) => showTip(tipHTML(d), e))
     .on("mouseleave", hideTip);
 }
 
@@ -247,7 +336,7 @@ function renderHeroStats(q1, q3) {
 function renderRanking(rows) {
   const max = d3.max(rows, (d) => d.taxaHomicidiosPor100k) || 1;
   $("#ranking").innerHTML = rows.map((d, i) => `
-    <div class="rk">
+    <div class="rk" data-cod="${d.codIBGE}">
       <span class="rk__pos">${String(i + 1).padStart(2, "0")}</span>
       <div class="rk__bar-area">
         <div class="rk__label">
@@ -257,6 +346,10 @@ function renderRanking(rows) {
       </div>
       <span class="rk__val">${fmt(d.taxaHomicidiosPor100k)}</span>
     </div>`).join("");
+  $("#ranking").querySelectorAll(".rk").forEach((el) => {
+    el.addEventListener("mousemove", (e) => showTip(tipHTML(state.byCapital.get(el.dataset.cod)), e));
+    el.addEventListener("mouseleave", hideTip);
+  });
 }
 
 /* ---------------- Q4 · Dispersão ---------------- */
@@ -287,9 +380,7 @@ function renderScatter(rows) {
     .attr("r", (d) => r(d.populacaoTotal))
     .attr("fill", (d) => rateColor(d.taxaHomicidiosPor100k))
     .attr("fill-opacity", 0.85)
-    .on("mousemove", (e, d) => showTip(
-      `<div class="tt__name">${d.municipio} — ${d.uf}</div>` +
-      `<div class="tt__row">taxa <b>${fmt(d.taxaHomicidiosPor100k)}</b> · escol. <b>${fmt(d.pctEnsinoMedioOuMais)}%</b></div>`, e))
+    .on("mousemove", (e, d) => showTip(tipHTML(state.byCapitalUF.get(d.uf) || d), e))
     .on("mouseleave", hideTip);
 }
 
@@ -328,6 +419,17 @@ function renderLine(series, nome) {
   const W = 880, H = 320, m = { t: 22, r: 56, b: 38, l: 52 };
   if (!series.length) return;
 
+  // bundle por ano para o tooltip padronizado (a série Q2 traz todos os campos)
+  const capUF = (state.byCapital.get(String(state.munSel)) || {}).siglaUF || null;
+  const pointBundle = (d) => ({
+    nome: `${nome} · ${d.ano}`,
+    siglaUF: capUF,
+    populacaoTotal: d.populacaoTotal,
+    homicidiosTotais: d.homicidiosTotais,
+    taxaHomicidiosPor100k: d.taxaHomicidiosPor100k,
+    niveisInstrucao: d.niveisInstrucao,
+  });
+
   const x = d3.scalePoint().domain(series.map((d) => d.ano)).range([m.l, W - m.r]).padding(0.4);
   const yCount = d3.scaleLinear().domain([0, d3.max(series, (d) => d.homicidiosTotais) * 1.1 || 1]).range([H - m.b, m.t]);
   const taxaVals = series.filter((d) => d.taxaHomicidiosPor100k != null);
@@ -348,7 +450,7 @@ function renderLine(series, nome) {
     .attr("x", (d) => x(d.ano) - 9).attr("width", 18)
     .attr("y", (d) => yCount(d.homicidiosTotais)).attr("height", (d) => H - m.b - yCount(d.homicidiosTotais))
     .attr("fill", "#33485C").attr("rx", 1)
-    .on("mousemove", (e, d) => showTip(`<div class="tt__name">${nome} · ${d.ano}</div><div class="tt__row">homicídios <b>${fmtInt(d.homicidiosTotais)}</b></div>${d.taxaHomicidiosPor100k != null ? `<div class="tt__row">taxa <b>${fmt(d.taxaHomicidiosPor100k)}</b></div>` : ""}`, e))
+    .on("mousemove", (e, d) => showTip(tipHTML(pointBundle(d)), e))
     .on("mouseleave", hideTip);
 
   // linha de taxa (brasa)
@@ -357,7 +459,7 @@ function renderLine(series, nome) {
   svg.append("g").selectAll("circle").data(taxaVals).join("circle")
     .attr("cx", (d) => x(d.ano)).attr("cy", (d) => yRate(d.taxaHomicidiosPor100k)).attr("r", 4)
     .attr("fill", (d) => rateColor(d.taxaHomicidiosPor100k)).attr("stroke", "#100E15").attr("stroke-width", 1)
-    .on("mousemove", (e, d) => showTip(`<div class="tt__name">${nome} · ${d.ano}</div><div class="tt__row">taxa <b>${fmt(d.taxaHomicidiosPor100k)}</b> / 100 mil</div>`, e))
+    .on("mousemove", (e, d) => showTip(tipHTML(pointBundle(d)), e))
     .on("mouseleave", hideTip);
 
   // legenda mínima
@@ -417,6 +519,97 @@ async function loadFontes() {
         ${f.portal ? `<a class="src__link" href="${f.portal}" target="_blank" rel="noopener">${f.portal}</a>` : ""}
       </div>`).join("")}
     </div>`;
+}
+
+/* ============================================================
+   Comparação lado a lado (cidade / estado / região)
+   ============================================================ */
+function cmpDataset(tipo) { return state.territorio[tipo] || []; }
+
+function cmpKey(tipo, item) {
+  if (tipo === "capitais") return String(item.codIBGE);
+  if (tipo === "estados") return String(item.codUF);
+  return String(item.codRegiao);
+}
+
+function cmpLabel(tipo, item) {
+  if (tipo === "estados") return `${item.nome} (${item.siglaUF})`;
+  if (tipo === "capitais") return `${item.nome} — ${item.siglaUF}`;
+  return item.nome;
+}
+
+function setupCompare() {
+  $("#cmpTipo").addEventListener("change", () => { fillCmpSelectors(); renderCompare(); });
+  $("#cmpA").addEventListener("change", renderCompare);
+  $("#cmpB").addEventListener("change", renderCompare);
+}
+
+function fillCmpSelectors() {
+  const tipo = $("#cmpTipo").value;
+  const data = cmpDataset(tipo).slice().sort((a, b) => (a.nome || "").localeCompare(b.nome || "", "pt-BR"));
+  const opts = data.map((it) => `<option value="${cmpKey(tipo, it)}">${cmpLabel(tipo, it)}</option>`).join("");
+  const a = $("#cmpA"), b = $("#cmpB");
+  const prevA = a.value, prevB = b.value;
+  a.innerHTML = opts; b.innerHTML = opts;
+  const keys = data.map((it) => cmpKey(tipo, it));
+  a.value = keys.includes(prevA) ? prevA : (keys[0] || "");
+  b.value = keys.includes(prevB) ? prevB : (keys[1] || keys[0] || "");
+}
+
+function cmpPanel(b) {
+  if (!b) return `<div class="cmp__col cmp__col--empty">selecione uma localidade</div>`;
+  return `<div class="cmp__col">
+    <div class="cmp__title">${tipTitle(b)}</div>
+    <div class="cmp__body">${valoresRows(b)}${escolaridadeRows(b)}</div>
+  </div>`;
+}
+
+function renderCompare() {
+  const box = $("#cmp");
+  if (!box) return;
+  const tipo = $("#cmpTipo").value;
+  if (!$("#cmpA").options.length) fillCmpSelectors();
+  const data = cmpDataset(tipo);
+  const find = (key) => data.find((it) => cmpKey(tipo, it) === key);
+  box.innerHTML = `${cmpPanel(find($("#cmpA").value))}${cmpPanel(find($("#cmpB").value))}`;
+}
+
+/* ============================================================
+   Atualizar dados — dispara o pipeline ETL recortado a [ini, fim]
+   ============================================================ */
+function setupUpdate() {
+  const ini = $("#anoIni"), fim = $("#anoFim");
+  const faixa = (state.meta && state.meta.anosContagem) || {};
+  if (faixa.min != null) { ini.min = fim.min = faixa.min; ini.value = faixa.min; }
+  if (faixa.max != null) { ini.max = fim.max = faixa.max; fim.value = faixa.max; }
+  $("#btnAtualizar").addEventListener("click", atualizarDados);
+}
+
+async function atualizarDados() {
+  const ini = +$("#anoIni").value, fim = +$("#anoFim").value;
+  if (!ini || !fim || ini > fim) {
+    setStatus(false, "intervalo inválido — o ano inicial deve ser ≤ final");
+    return;
+  }
+  const overlay = $("#overlay");
+  overlay.hidden = false;
+  $("#btnAtualizar").disabled = true;
+  try {
+    const r = await fetch("/api/atualizar", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ini, fim }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error(data.erro || `HTTP ${r.status}`);
+    $("#overlayMsg").textContent = "dados atualizados — recarregando o painel…";
+    location.reload();
+  } catch (err) {
+    console.error(err);
+    overlay.hidden = true;
+    $("#btnAtualizar").disabled = false;
+    setStatus(false, "falha ao atualizar dados: " + err.message);
+  }
 }
 
 /* ============================================================

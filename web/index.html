@@ -28,12 +28,32 @@
           <output id="anoOut" class="ctrl__value">2022</output>
         </span>
       </label>
+      <div class="ctrl ctrl--update">
+        <span class="ctrl__label">Recarregar período (exercícios)</span>
+        <span class="ctrl__field upd">
+          <span class="upd__group">
+            <input type="number" id="anoIni" class="num" inputmode="numeric" aria-label="Ano inicial" />
+            <span class="upd__arrow" aria-hidden="true">→</span>
+            <input type="number" id="anoFim" class="num" inputmode="numeric" aria-label="Ano final" />
+          </span>
+          <button type="button" id="btnAtualizar" class="btn">Atualizar</button>
+        </span>
+      </div>
       <div class="dbstatus" id="dbstatus">
         <span class="dbstatus__dot"></span>
         <span id="dbstatusText">conectando ao MongoDB…</span>
       </div>
     </div>
   </header>
+
+  <!-- ================= OVERLAY (atualização do pipeline) ================= -->
+  <div class="overlay" id="overlay" hidden>
+    <div class="overlay__box">
+      <div class="overlay__spin" aria-hidden="true"></div>
+      <p class="overlay__msg" id="overlayMsg">atualizando dados…</p>
+      <p class="overlay__hint">re-executando o pipeline ETL e recarregando o MongoDB. Isso pode levar alguns segundos.</p>
+    </div>
+  </div>
 
   <!-- ================= PULSE STRIP ================= -->
   <section class="pulse" aria-label="Pulso nacional — taxa das capitais no ano selecionado">
@@ -55,8 +75,12 @@
       </div>
       <div class="hero__body">
         <figure class="mapwrap">
-          <svg id="map" viewBox="0 0 520 540" role="img" aria-label="Mapa do Brasil por região"></svg>
-          <div class="map__tooltip" id="mapTip" hidden></div>
+          <figcaption class="mapwrap__cap"><span class="eyebrow">Por macrorregião</span></figcaption>
+          <svg id="mapRegioes" viewBox="0 0 520 540" role="img" aria-label="Mapa do Brasil por região"></svg>
+        </figure>
+        <figure class="mapwrap">
+          <figcaption class="mapwrap__cap"><span class="eyebrow">Por estado · capitais</span></figcaption>
+          <svg id="mapEstados" viewBox="0 0 520 540" role="img" aria-label="Mapa do Brasil por estado e capitais"></svg>
         </figure>
         <aside class="hero__side">
           <ul class="stat" id="heroStats"></ul>
@@ -66,9 +90,38 @@
             <div class="scale__ticks"><span>0</span><span>20</span><span>40</span><span>60+</span></div>
           </div>
         </aside>
+        <div class="map__tooltip" id="mapTip" hidden></div>
       </div>
       <button class="qpeek__toggle" data-peek="q3">ver consulta executada</button>
       <pre class="qpeek" id="peek-q3" hidden></pre>
+    </section>
+
+    <!-- ===== COMPARAÇÃO ===== -->
+    <section class="card card--wide" id="card-compara">
+      <div class="card__head">
+        <div class="qtag"><span class="qtag__q">＋</span><span class="qtag__op">comparar lado a lado</span></div>
+        <h2 class="card__title">Comparar duas localidades</h2>
+        <p class="card__desc">Escolha o tipo e duas localidades para confrontar população, homicídios, taxa e escolaridade no ano selecionado.</p>
+        <div class="card__controls cmp__controls">
+          <label class="ctrl ctrl--inline">
+            <span class="ctrl__label">Tipo</span>
+            <select id="cmpTipo" class="select">
+              <option value="capitais">Cidade (capital)</option>
+              <option value="estados">Estado</option>
+              <option value="regioes">Região</option>
+            </select>
+          </label>
+          <label class="ctrl ctrl--inline">
+            <span class="ctrl__label">Localidade A</span>
+            <select id="cmpA" class="select"></select>
+          </label>
+          <label class="ctrl ctrl--inline">
+            <span class="ctrl__label">Localidade B</span>
+            <select id="cmpB" class="select"></select>
+          </label>
+        </div>
+      </div>
+      <div class="cmp" id="cmp"></div>
     </section>
 
     <!-- ===== Q1 RANKING ===== -->

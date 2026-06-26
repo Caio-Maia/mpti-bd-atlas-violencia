@@ -17,6 +17,9 @@ from flask import Flask, jsonify, request, send_from_directory
 
 import queries as Q
 from config import MONGO_DB
+from extract import run_extract
+from transform import run_transform
+from load import run_load
 
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 
@@ -184,6 +187,54 @@ def api_q7():
     pipeline = Q.q7_pipeline(cod, ano)
     return jsonify(_envelope("municipios", "aggregate", pipeline,
                              list(Q.get_db().municipios.aggregate(pipeline))))
+
+
+# --------------------------------------------------------------------------- #
+# Território — alimenta os dois mapas e a comparação numa só chamada por ano.
+# Cada item segue o formato padronizado do tooltip (Valores + Escolaridade).
+# --------------------------------------------------------------------------- #
+@app.get("/api/territorio")
+def api_territorio():
+    ano = _int("ano", 2022)
+    db = Q.get_db()
+    return jsonify({
+        "ano": ano,
+        "regioes": list(db.municipios.aggregate(Q.agg_regioes_pipeline(ano))),
+        "estados": list(db.municipios.aggregate(Q.agg_estados_pipeline(ano))),
+        "capitais": list(db.municipios.aggregate(Q.capitais_detalhe_pipeline(ano))),
+    })
+
+
+# --------------------------------------------------------------------------- #
+# Atualizar dados — re-executa o pipeline completo recortado a [ini, fim] e
+# recarrega o MongoDB (drop). Síncrono: pode levar dezenas de segundos.
+# --------------------------------------------------------------------------- #
+@app.post("/api/atualizar")
+def api_atualizar():
+    body = request.get_json(silent=True) or {}
+    try:
+        ini = int(body.get("ini"))
+        fim = int(body.get("fim"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "erro": "Informe 'ini' e 'fim' como anos inteiros."}), 400
+    if ini > fim:
+        return jsonify({"ok": False, "erro": "O ano inicial não pode ser maior que o final."}), 400
+
+    try:
+        run_extract()
+        run_transform(ini, fim)
+        run_load(drop_database=True)
+    except Exception as exc:  # noqa: BLE001 — devolve a falha ao front
+        return jsonify({"ok": False, "erro": str(exc)}), 500
+
+    db = Q.get_db()
+    return jsonify({
+        "ok": True,
+        "intervalo": {"ini": ini, "fim": fim},
+        "totais": {
+            "municipios": db.municipios.estimated_document_count(),
+        },
+    })
 
 
 if __name__ == "__main__":

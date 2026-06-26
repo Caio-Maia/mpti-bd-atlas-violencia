@@ -345,11 +345,23 @@ def build_municipio_documents(
     return documentos
 
 
-def run_transform() -> None:
+def run_transform(ano_min: int | None = None, ano_max: int | None = None) -> None:
     ensure_dirs(SILVER_DIR, GOLD_DIR)
     violencia = transform_violencia()
     sidra = transform_sidra()
     geo, _, _ = transform_localidades(sidra)
+
+    # Recorte opcional por intervalo de anos (exercício inicial/final). Filtramos as
+    # camadas Silver antes da modelagem para que apenas as séries dentro de [min, max]
+    # cheguem ao Gold; municípios sem nenhuma série no intervalo são naturalmente
+    # descartados em build_municipio_documents (groupby sobre violencia já recortada).
+    if ano_min is not None:
+        violencia = violencia[violencia["ano"] >= ano_min]
+        sidra = sidra[sidra["ano"] >= ano_min]
+    if ano_max is not None:
+        violencia = violencia[violencia["ano"] <= ano_max]
+        sidra = sidra[sidra["ano"] <= ano_max]
+
     documentos = build_municipio_documents(violencia, sidra, geo)
     save_json(GOLD_DIR / "municipios.json", documentos)
     save_json(GOLD_DIR / "fontes.json", fontes_documentos())

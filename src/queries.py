@@ -195,6 +195,118 @@ def q7_lookup_fontes(cod_ibge: int = 2507507, ano: int = 2022):
     return list(get_db().municipios.aggregate(q7_pipeline(cod_ibge, ano)))
 
 
+# ---------------------------------------------------------------------------
+# Pipelines de TERRITÓRIO (alimentam os dois mapas e a comparação no painel).
+# Reaproveitam o mesmo estilo "pipeline-as-data" das consultas Q1–Q7, mas não
+# fazem parte do catálogo avaliado — por isso ficam separadas.
+#
+# Como população e escolaridade só existem para as 27 capitais (SIDRA), as
+# agregações por região/estado somam apenas as capitais contidas; a taxa é a
+# média das taxas das capitais ($avg), conforme decisão de modelagem.
+# ---------------------------------------------------------------------------
+
+NIVEIS_INSTRUCAO = [
+    "semInstrucao",
+    "fundamentalIncompleto",
+    "fundamentalCompleto",
+    "medioIncompleto",
+    "medioCompleto",
+    "superiorIncompleto",
+    "superiorCompleto",
+    "naoDeterminado",
+]
+
+
+def _soma_niveis_group() -> dict:
+    """$sum de cada nível de instrução para o estágio $group."""
+    return {n: {"$sum": f"$seriesAnuais.niveisInstrucao.{n}"} for n in NIVEIS_INSTRUCAO}
+
+
+def _niveis_project() -> dict:
+    """Reagrupa os níveis somados num subdocumento niveisInstrucao arredondado."""
+    return {n: {"$round": [f"${n}", 1]} for n in NIVEIS_INSTRUCAO}
+
+
+def capitais_detalhe_pipeline(ano: int = 2022):
+    """Capitais com todos os campos do tooltip padronizado, ordenadas por taxa."""
+    return [
+        {"$unwind": "$seriesAnuais"},
+        {"$match": {"seriesAnuais.ano": ano, "seriesAnuais.taxaHomicidiosPor100k": {"$ne": None}}},
+        {"$project": {
+            "_id": 0,
+            "codIBGE": 1,
+            "codUF": 1,
+            "codRegiao": 1,
+            "nome": 1,
+            "siglaUF": 1,
+            "nomeRegiao": 1,
+            "populacaoTotal": "$seriesAnuais.populacaoTotal",
+            "homicidiosTotais": "$seriesAnuais.homicidiosTotais",
+            "taxaHomicidiosPor100k": "$seriesAnuais.taxaHomicidiosPor100k",
+            "niveisInstrucao": "$seriesAnuais.niveisInstrucao",
+        }},
+        {"$sort": {"taxaHomicidiosPor100k": -1}},
+    ]
+
+
+def agg_regioes_pipeline(ano: int = 2022):
+    """Agregado por macrorregião (soma das capitais)."""
+    return [
+        {"$unwind": "$seriesAnuais"},
+        {"$match": {"seriesAnuais.ano": ano, "seriesAnuais.taxaHomicidiosPor100k": {"$ne": None}}},
+        {"$group": {
+            "_id": {"codRegiao": "$codRegiao", "nome": "$nomeRegiao"},
+            "populacaoTotal": {"$sum": "$seriesAnuais.populacaoTotal"},
+            "homicidiosTotais": {"$sum": "$seriesAnuais.homicidiosTotais"},
+            "mediaTaxa": {"$avg": "$seriesAnuais.taxaHomicidiosPor100k"},
+            "municipios": {"$sum": 1},
+            **_soma_niveis_group(),
+        }},
+        {"$sort": {"mediaTaxa": -1}},
+        {"$project": {
+            "_id": 0,
+            "codRegiao": "$_id.codRegiao",
+            "nome": "$_id.nome",
+            "populacaoTotal": {"$round": ["$populacaoTotal", 1]},
+            "homicidiosTotais": 1,
+            "taxaHomicidiosPor100k": {"$round": ["$mediaTaxa", 2]},
+            "municipios": 1,
+            "niveisInstrucao": _niveis_project(),
+        }},
+    ]
+
+
+def agg_estados_pipeline(ano: int = 2022):
+    """Agregado por UF (cada estado tem 1 capital com taxa/escolaridade)."""
+    return [
+        {"$unwind": "$seriesAnuais"},
+        {"$match": {"seriesAnuais.ano": ano, "seriesAnuais.taxaHomicidiosPor100k": {"$ne": None}}},
+        {"$group": {
+            "_id": {"codUF": "$codUF", "sigla": "$siglaUF", "nome": "$nomeUF",
+                    "codRegiao": "$codRegiao", "regiao": "$nomeRegiao"},
+            "populacaoTotal": {"$sum": "$seriesAnuais.populacaoTotal"},
+            "homicidiosTotais": {"$sum": "$seriesAnuais.homicidiosTotais"},
+            "mediaTaxa": {"$avg": "$seriesAnuais.taxaHomicidiosPor100k"},
+            "municipios": {"$sum": 1},
+            **_soma_niveis_group(),
+        }},
+        {"$sort": {"mediaTaxa": -1}},
+        {"$project": {
+            "_id": 0,
+            "codUF": "$_id.codUF",
+            "siglaUF": "$_id.sigla",
+            "nome": "$_id.nome",
+            "codRegiao": "$_id.codRegiao",
+            "nomeRegiao": "$_id.regiao",
+            "populacaoTotal": {"$round": ["$populacaoTotal", 1]},
+            "homicidiosTotais": 1,
+            "taxaHomicidiosPor100k": {"$round": ["$mediaTaxa", 2]},
+            "municipios": 1,
+            "niveisInstrucao": _niveis_project(),
+        }},
+    ]
+
+
 def run_all_examples() -> None:
     examples = [
         ("Q1 - Top 10 municípios", q1_top10_municipios_ano),
