@@ -164,7 +164,14 @@ def transform_sidra() -> pd.DataFrame:
     return pivot
 
 def flatten_municipio(item: dict[str, Any]) -> dict[str, Any]:
-    uf = item.get("microrregiao", {}).get("mesorregiao", {}).get("UF", {})
+    # A maioria dos municípios traz a hierarquia em microrregião → mesorregião → UF.
+    # Municípios mais recentes (ex.: Boa Esperança do Norte/MT) vêm com microrregião
+    # nula e a UF acessível pela trilha regiao-imediata → regiao-intermediaria.
+    micro = item.get("microrregiao") or {}
+    uf = micro.get("mesorregiao", {}).get("UF")
+    if not uf:
+        imediata = item.get("regiao-imediata") or {}
+        uf = imediata.get("regiao-intermediaria", {}).get("UF", {})
     regiao = uf.get("regiao", {})
     return {
         "codIBGE": str(item.get("id")).zfill(7),
@@ -272,7 +279,17 @@ def build_municipio_documents(
     for cod, group in merged.groupby("codIBGE"):
         group = group.sort_values("ano")
         first = group.iloc[0]
-        nome = first.get("nome") or first.get("nomeSidra") or f"Município {cod}"
+        # NaN é "truthy" em Python, então um simples `or` não cai no fallback quando
+        # o município existe no Atlas mas não nas Localidades/SIDRA. Coalesce explícito.
+        def _coalesce_nome(*candidatos: Any) -> str:
+            for cand in candidatos:
+                if cand is not None and not (isinstance(cand, float) and pd.isna(cand)):
+                    texto = str(cand).strip()
+                    if texto:
+                        return texto
+            return f"Município {cod}"
+
+        nome = _coalesce_nome(first.get("nome"), first.get("nomeSidra"))
 
         series = []
         for _, row in group.iterrows():
@@ -328,11 +345,23 @@ def build_municipio_documents(
     return documentos
 
 
-def run_transform() -> None:
+def run_transform(ano_min: int | None = None, ano_max: int | None = None) -> None:
     ensure_dirs(SILVER_DIR, GOLD_DIR)
     violencia = transform_violencia()
     sidra = transform_sidra()
     geo, _, _ = transform_localidades(sidra)
+
+    # Recorte opcional por intervalo de anos (exercício inicial/final). Filtramos as
+    # camadas Silver antes da modelagem para que apenas as séries dentro de [min, max]
+    # cheguem ao Gold; municípios sem nenhuma série no intervalo são naturalmente
+    # descartados em build_municipio_documents (groupby sobre violencia já recortada).
+    if ano_min is not None:
+        violencia = violencia[violencia["ano"] >= ano_min]
+        sidra = sidra[sidra["ano"] >= ano_min]
+    if ano_max is not None:
+        violencia = violencia[violencia["ano"] <= ano_max]
+        sidra = sidra[sidra["ano"] <= ano_max]
+
     documentos = build_municipio_documents(violencia, sidra, geo)
     save_json(GOLD_DIR / "municipios.json", documentos)
     save_json(GOLD_DIR / "fontes.json", fontes_documentos())
