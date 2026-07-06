@@ -304,7 +304,7 @@ classDiagram
 
     class Fonte {
         <<referência>>
-        +int codFonte
+        +string codFonte
         +string nome
         +string origem
         +string portal
@@ -365,7 +365,7 @@ classDiagram
 
 | Atributo | Tipo | Descrição |
 |---|---|---|
-| `codFonte` | Integer (id) | Identificador da fonte. |
+| `codFonte` | String (id) | Identificador da fonte (slug), armazenado como `_id` na coleção `fontes` (ex.: `"atlas_violencia_ipea_fbsp"`). |
 | `nome` | String | Ex.: "Atlas da Violência / Ipea". |
 | `origem` | String | Ex.: "SIM / Datasus / MS". |
 | `portal` | String | URL de acesso. |
@@ -515,7 +515,7 @@ Município
 | seriesAnuais    | Multivalorado  | Array                 | Embutido              |
 | SerieAnual      | Classe         | Documento embutido    | Lido junto            |
 | niveisInstrucao | Composto       | Documento embutido    | Estrutura fixa        |
-| fonteIds        | Multivalorado  | Array ObjectId        | Referência            |
+| fonteIds        | Multivalorado  | Array de String       | Referência (por `_id`)|
 | UF              | Classe         | Coleção `ufs`         | Referência            |
 | Regiao          | Classe         | Coleção `regioes`     | Referência            |
 | Fonte           | Classe         | Coleção `fontes`      | Referência            |
@@ -568,8 +568,8 @@ A coleção principal representa um município brasileiro e toda a sua série hi
       },
 
       "fonteIds": [
-        ObjectId("atlas"),
-        ObjectId("sidra")
+        "atlas_violencia_ipea_fbsp",
+        "ibge_sidra_5919"
       ]
     }
   ]
@@ -607,7 +607,7 @@ A coleção principal representa um município brasileiro e toda a sua série hi
 
 ```json
 {
-  "_id": ObjectId("..."),
+  "_id": "atlas_violencia_ipea_fbsp",
   "nome": "Atlas da Violência",
   "origem": "Ipea / FBSP",
   "portal": "https://www.ipea.gov.br/atlasviolencia",
