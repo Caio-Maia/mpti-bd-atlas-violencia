@@ -31,7 +31,7 @@ Atlas da Violência (CSV local — Ipea)   ─┐
                                          ├─► [Extração]
 IBGE SIDRA Tabela 5919 (CSV local)      ─┤
                                          │
-IBGE API Localidades (REST — a coletar) ─┘
+IBGE API Localidades (REST) ─┘
 
 * Prata (JSON trabalhado)
                                             ↓
@@ -57,7 +57,7 @@ IBGE API Localidades (REST — a coletar) ─┘
 (1) **mapa coroplético** do Brasil por taxa de homicídios, com filtro de ano e indicador; 
 (2) **ranking interativo** (top-N municípios) que cruza violência e indicador socioeconômico selecionado. Cada pergunta da Seção 4 vira um elemento da interface.
 
-### 2.c Por que documentos/MongoDB (justificativa consciente)
+### 2.c Por que documentos/MongoDB
 
 O padrão de acesso dominante é *"pegar tudo de um município de uma vez"*: seus dados fixos mais toda a sua série histórica anual de violência e indicadores socioeconômicos — exatamente o que alimenta o mapa e o ranking. Modelar `Município` como documento com um **array embutido de séries anuais** mantém esses dados lidos-juntos fisicamente juntos, evitando o JOIN por ano que um PostgreSQL exigiria (uma tabela `municipio` + uma tabela `serie_anual` com 5–8 colunas e 1 linha por ano). Como a série por município é **limitada e de crescimento previsível** (cerca de uma entrada por ano, ~3 décadas → bem abaixo do limite de 16 MB do BSON), o embedding é seguro. O schema também tolera bem a **variação de indicadores entre anos/fontes** (campos opcionais ausentes em anos sem coleta), sem migração de esquema. Não é uma defesa absoluta — para análises estatísticas tabulares pesadas o relacional competiria —, mas para o padrão *"documento do município pronto para visualização"* o modelo de documentos serve melhor.
 
